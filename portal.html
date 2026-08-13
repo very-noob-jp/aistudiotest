@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Residential Wi-Fi Service | My Home Portal</title>
+    <!-- ★ hCaptcha APIの読み込み -->
+    <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+    <style>
+        :root {
+            --primary-color: #003366; 
+            --secondary-color: #005b9f; 
+            --accent-color: #0099ff;
+            --text-dark: #2c3e50;
+            --text-gray: #5c6b7a;
+            --text-light: #9ba4b5;
+            --bg-color: #f0f4f8;
+            --white: #ffffff;
+            --border-radius: 12px;
+            --box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+            --transition: all 0.3s ease;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Meiryo", sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-dark);
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+            line-height: 1.6;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            color: var(--white);
+            position: relative;
+            overflow: hidden;
+        }
+
+        header::after {
+            content: ''; position: absolute;
+            top: -50%; right: -20%;
+            width: 300px; height: 300px;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 70%);
+            border-radius: 50%;
+        }
+
+        .logo-area { display: flex; align-items: baseline; gap: 10px; max-width: 600px; margin: 0 auto; }
+        .logo-main { font-size: 24px; font-weight: 800; letter-spacing: 1px; }
+        .logo-sub { font-size: 12px; font-weight: 400; letter-spacing: 1px; border-left: 1px solid rgba(255,255,255,0.4); padding-left: 10px; opacity: 0.9; }
+
+        main { padding: 30px 20px; flex-grow: 1; max-width: 500px; margin: 0 auto; width: 100%; }
+
+        .step-indicator { display: flex; justify-content: space-between; margin-bottom: 30px; padding: 0 10px; position: relative; }
+        .step-indicator::before { content: ''; position: absolute; top: 14px; left: 10%; right: 10%; height: 2px; background: #e2e8f0; z-index: 1; }
+        .step { text-align: center; position: relative; z-index: 2; width: 33.33%; }
+        .step-circle { width: 28px; height: 28px; background: #e2e8f0; border-radius: 50%; margin: 0 auto 8px; color: #718096; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; border: 4px solid var(--bg-color); transition: var(--transition); }
+        .step.active .step-circle { background: var(--accent-color); color: var(--white); box-shadow: 0 0 0 3px rgba(0, 153, 255, 0.2); }
+        .step.active .step-label { color: var(--primary-color); font-weight: bold; }
+        .step-label { font-size: 11px; color: var(--text-light); }
+
+        .card { background: var(--white); border-radius: var(--border-radius); box-shadow: var(--box-shadow); padding: 25px; margin-bottom: 25px; }
+        .card-title { font-size: 18px; font-weight: 700; color: var(--primary-color); margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
+        .card-title svg { width: 20px; height: 20px; fill: var(--accent-color); }
+        .description { font-size: 14px; color: var(--text-gray); margin-bottom: 20px; }
+
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
+        .info-item { display: flex; flex-direction: column; }
+        .info-label { font-size: 11px; color: var(--text-light); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .info-value { font-size: 15px; font-weight: 700; color: var(--text-dark); }
+
+        .tos-container { margin-bottom: 25px; }
+        .tos-header { font-size: 14px; font-weight: bold; margin-bottom: 10px; color: var(--text-dark); }
+        .tos-box { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; height: 160px; overflow-y: auto; padding: 15px; font-size: 12px; color: var(--text-gray); scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+        .tos-box::-webkit-scrollbar { width: 6px; }
+        .tos-box::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
+        .tos-box h4 { margin-top: 15px; margin-bottom: 5px; color: var(--text-dark); font-size: 13px;}
+        .tos-box h4:first-child { margin-top: 0; }
+        .tos-box p { margin-bottom: 10px; }
+        .tos-box ul { padding-left: 20px; margin-bottom: 10px; }
+        .tos-box li { margin-bottom: 4px; }
+
+        .agree-container { display: flex; align-items: flex-start; gap: 12px; background: #eff6ff; padding: 15px; border-radius: 8px; border: 1px solid #bfdbfe; margin-bottom: 30px; cursor: pointer; transition: var(--transition); }
+        .agree-container:hover { background: #dbeafe; }
+        .agree-container input[type="checkbox"] { appearance: none; -webkit-appearance: none; width: 22px; height: 22px; border: 2px solid var(--secondary-color); border-radius: 4px; background: var(--white); cursor: pointer; position: relative; flex-shrink: 0; margin-top: 2px; transition: var(--transition); }
+        .agree-container input[type="checkbox"]:checked { background: var(--secondary-color); }
+        .agree-container input[type="checkbox"]:checked::after { content: ''; position: absolute; top: 2px; left: 6px; width: 5px; height: 10px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+        .agree-text { font-size: 14px; font-weight: bold; color: var(--primary-color); user-select: none; }
+        .agree-subtext { font-size: 11px; color: var(--text-gray); display: block; margin-top: 2px; font-weight: normal;}
+
+        .btn-submit { background-color: #e2e8f0; color: #a0aec0; border: none; width: 100%; padding: 18px; font-size: 16px; font-weight: bold; border-radius: 50px; cursor: not-allowed; transition: var(--transition); display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .btn-submit.active { background: linear-gradient(135deg, var(--secondary-color) 0%, var(--primary-color) 100%); color: var(--white); cursor: pointer; box-shadow: 0 10px 20px rgba(0, 51, 102, 0.25); transform: translateY(-2px); }
+        .btn-submit.active:active { transform: translateY(0); box-shadow: 0 5px 10px rgba(0, 51, 102, 0.2); }
+
+        /* モーダル */
+        #captcha-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); z-index: 1000; justify-content: center; align-items: center; padding: 20px; opacity: 0; animation: fadeIn 0.3s forwards; }
+        @keyframes fadeIn { to { opacity: 1; } }
+        .modal-content { background: var(--white); padding: 30px; border-radius: 16px; max-width: 400px; width: 100%; text-align: center; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); transform: scale(0.95); animation: scaleUp 0.3s forwards; }
+        @keyframes scaleUp { to { transform: scale(1); } }
+        .modal-icon { width: 50px; height: 50px; background: #eff6ff; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 15px; }
+        .modal-icon svg { width: 24px; height: 24px; fill: var(--secondary-color); }
+        .modal-header { font-weight: 800; font-size: 20px; color: var(--primary-color); margin-bottom: 10px; }
+        .modal-body { font-size: 14px; color: var(--text-gray); margin-bottom: 25px; }
+        
+        .modal-footer { display: flex; gap: 12px; }
+        .btn-cancel { flex: 1; padding: 14px; background: #f1f5f9; color: #64748b; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: var(--transition); }
+        .btn-cancel:hover { background: #e2e8f0; }
+
+        footer { text-align: center; padding: 20px; font-size: 11px; color: var(--text-light); margin-top: auto; }
+        
+        .admin-link {
+            color: #9ba4b5; text-decoration: none; margin-top: 20px; display: inline-block;
+            font-size: 12px; border: 1px solid #e2e8f0; padding: 8px 16px; border-radius: 20px;
+            transition: all 0.3s ease; background-color: var(--white);
+        }
+        .admin-link:hover { background-color: #e2e8f0; color: var(--text-dark); }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="logo-area">
+        <div class="logo-main">Guest Wi-Fi</div>
+        <div class="logo-sub">RESIDENTIAL NETWORK</div>
+    </div>
+</header>
+
+<main>
+    <div class="step-indicator">
+        <div class="step active"><div class="step-circle">1</div><div class="step-label">規約の確認</div></div>
+        <div class="step"><div class="step-circle">2</div><div class="step-label">セキュリティ認証</div></div>
+        <div class="step"><div class="step-circle">3</div><div class="step-label">インターネット接続</div></div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">
+            <svg viewBox="0 0 24 24"><path d="M12 21C10.6 21 9.5 19.9 9.5 18.5C9.5 17.1 10.6 16 12 16C13.4 16 14.5 17.1 14.5 18.5C14.5 19.9 13.4 21 12 21ZM12 12C8.6 12 5.5 13.5 3.5 15.8L4.9 17.2C6.6 15.2 9.2 14 12 14C14.8 14 17.4 15.2 19.1 17.2L20.5 15.8C18.5 13.5 15.4 12 12 12ZM12 7C7.3 7 3.1 9 0 12.2L1.4 13.6C4.1 10.8 7.9 9 12 9C16.1 9 19.9 10.8 22.6 13.6L24 12.2C20.9 9 16.7 7 12 7ZM12 2C5.9 2 0.4 4.5 -3.5 8.3L-2.1 9.7C1.4 6.3 6.4 4 12 4C17.6 4 22.6 6.3 26.1 9.7L27.5 8.3C23.6 4.5 18.1 2 12 2Z"/></svg>
+            ネットワークアクセス
+        </div>
+        <p class="description">
+            当ネットワークをご利用いただくには、以下の利用規約への同意およびセキュリティ認証が必要です。
+        </p>
+
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">SSID (Network Name)</div>
+                <div class="info-value">Guest_Portal_Access</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Security Protocol</div>
+                <div class="info-value">WPA2 / WPA3-SAE</div>
+            </div>
+            <div class="info-item" style="grid-column: span 2;">
+                <div class="info-label">Session Limit</div>
+                <div class="info-value">無制限 (Unlimited)</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tos-container">
+        <div class="tos-header">利用規約 (Terms of Service)</div>
+        <div class="tos-box">
+            <h4>第1条（本規約の適用）</h4>
+            <p>本規約は、本施設のネットワーク管理者（以下「管理者」）が提供するWi-Fi接続サービス（以下「本サービス」）の利用に関わる一切の条件を定めるものです。利用者は、本サービスに接続した時点で本規約に同意したものとみなされます。</p>
+            <h4>第2条（通信の暗号化とセキュリティ）</h4>
+            <p>1. 本サービスは利便性を考慮し、端末とアクセスポイント間の通信において高度な暗号化を保証するものではありません。利用者は、悪意のある第三者に通信内容を傍受されるリスクを理解した上でご利用ください。</p>
+            <p>2. 機密情報等の送受信を行う場合は、SSL/TLS接続等のエンドツーエンド暗号化通信を自らの責任において確保するものとします。</p>
+            <h4>第3条（禁止事項）</h4>
+            <p>利用者は、本サービスの利用にあたり、以下の行為を行ってはならないものとします。</p>
+            <ul>
+                <li>他者の権利を侵害する行為。</li>
+                <li>スパム送信、サイバー攻撃等のインフラへの妨害行為。</li>
+                <li>P2P等を利用した極端なネットワーク帯域の占有。</li>
+            </ul>
+            <h4>第4条（利用制限およびサービスの停止）</h4>
+            <p>管理者は、利用者が本規約に違反した場合、事前の通知なく本サービスの提供を遮断することができます。</p>
+            <h4>第5条（免責事項）</h4>
+            <p>管理者は、本サービスの利用により利用者に生じたあらゆる損害について、一切の責任を負いません。また通信速度や安定性についてもいかなる保証も行いません。</p>
+            <h4>第6条（セキュリティ認証とデータ処理）</h4>
+            <p>不正なプログラムによるアクセスを防ぐため、接続時にhCaptchaによるシステム評価を要求します。</p>
+        </div>
+    </div>
+
+    <label class="agree-container" for="agree-check">
+        <input type="checkbox" id="agree-check" onchange="updateMainButton()">
+        <div>
+            <div class="agree-text">上記の利用規約に同意する</div>
+            <div class="agree-subtext">I agree to the Terms of Service.</div>
+        </div>
+    </label>
+
+    <button type="button" id="open-modal-btn" class="btn-submit" onclick="showModal()" disabled>
+        <!-- Lock Icon SVG -->
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 17C13.1 17 14 16.1 14 15C14 13.9 13.1 13 12 13C10.9 13 10 13.9 10 15C10 16.1 10.9 17 12 17ZM18 8H17V6C17 3.24 14.76 1 12 1C9.24 1 7 3.24 7 6V8H6C4.9 8 4 8.9 4 10V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V10C20 8.9 19.1 8 18 8ZM15 8H9V6C9 4.34 10.34 3 12 3C13.66 3 15 4.34 15 6V8Z"/></svg>
+        認証に進む (Next)
+    </button>
+
+    <!-- ★ バックエンドにトークンを送るためのフォーム -->
+    <form id="auth-form" action="/api/portal/connect" method="POST" style="display:none;">
+        <input type="hidden" name="h-captcha-response" id="hcaptcha-token">
+    </form>
+</main>
+
+<!-- ロボットではない証明モーダル -->
+<div id="captcha-modal">
+    <div class="modal-content">
+        <div class="modal-icon">
+            <svg viewBox="0 0 24 24"><path d="M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1ZM12 11.99H19C18.47 16.11 15.72 19.78 12 20.92V12H5V6.3L12 3.19V11.99Z"/></svg>
+        </div>
+        <div class="modal-header">
+            セキュリティ・チェック
+        </div>
+        <div class="modal-body">
+            ネットワーク保護のため、hCaptchaによるシステム・セキュリティ確認を行っています。
+        </div>
+        
+        <!-- ★ hCaptcha ウィジェット (data-callbackを指定) -->
+        <div style="display: flex; justify-content: center; margin-bottom: 20px;">
+            <div class="h-captcha" data-sitekey="8dfae658-fe9c-4506-a682-71f07d4ce88a" data-callback="onHcaptchaSuccess"></div>
+        </div>
+
+        <div class="modal-footer">
+            <button class="btn-cancel" onclick="hideModal()">キャンセル</button>
+            <button id="verify-status-btn" class="btn-submit" style="flex:2; padding:14px; margin:0;" disabled>自動確認中...</button>
+        </div>
+    </div>
+</div>
+
+<footer>
+    &copy; 2024 Residential Network Infrastructure. All rights reserved.<br>
+    
+    <!-- インターネットが切れていても、いつでも設定変更に飛べる秘密のボタン -->
+    <a href="/" class="admin-link">
+        <svg viewBox="0 0 24 24" width="14" height="14" style="fill: currentColor; vertical-align: middle; margin-right: 4px; position: relative; top: -1px;"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.06-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.73,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.06,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.49-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+        ルーター管理画面 (Admin Settings)
+    </a>
+</footer>
+
+<script>
+    function updateMainButton() {
+        const check = document.getElementById('agree-check');
+        const btn = document.getElementById('open-modal-btn');
+        if (check.checked) {
+            btn.disabled = false;
+            btn.classList.add('active');
+            btn.innerHTML = 'インターネットに接続する (Connect)';
+        } else {
+            btn.disabled = true;
+            btn.classList.remove('active');
+            btn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 17C13.1 17 14 16.1 14 15C14 13.9 13.1 13 12 13C10.9 13 10 13.9 10 15C10 16.1 10.9 17 12 17ZM18 8H17V6C17 3.24 14.76 1 12 1C9.24 1 7 3.24 7 6V8H6C4.9 8 4 8.9 4 10V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V10C20 8.9 19.1 8 18 8ZM15 8H9V6C9 4.34 10.34 3 12 3C13.66 3 15 4.34 15 6V8Z"/></svg> 認証に進む (Next)';
+        }
+    }
+
+    function showModal() {
+        if(!document.getElementById('agree-check').checked) return;
+        document.getElementById('captcha-modal').style.display = 'flex';
+    }
+
+    function hideModal() {
+        document.getElementById('captcha-modal').style.display = 'none';
+    }
+
+    function onHcaptchaSuccess(token) {
+        document.getElementById('hcaptcha-token').value = token;
+        const verifyBtn = document.getElementById('verify-status-btn');
+        verifyBtn.innerHTML = '認証完了！接続中...';
+        verifyBtn.classList.add('active');
+        
+        setTimeout(() => {
+            document.getElementById('auth-form').submit();
+        }, 800);
+    }
+
+    document.getElementById('captcha-modal').addEventListener('click', function(e) {
+        if(e.target === this) hideModal();
+    });
+</script>
+
+</body>
+</html>
