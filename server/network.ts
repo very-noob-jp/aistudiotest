@@ -302,8 +302,10 @@ export async function getConnectedDevices() {
 }
 
 export async function getMacFromIp(ip: string) {
-  if (!ip || ip === "127.0.0.1") return null;
-  const res = await runSudo(`ip neigh show ${ip}`);
+  if (!ip || ip === "127.0.0.1" || ip === "::1") return null;
+  // Clean IPv4-mapped IPv6 address (e.g. ::ffff:192.168.4.10 -> 192.168.4.10)
+  const cleanIp = ip.replace(/^.*:/, '');
+  const res = await runSudo(`ip neigh show ${cleanIp}`);
   const match = res.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/);
   return match ? match[0].toLowerCase() : null;
 }
@@ -424,29 +426,30 @@ bogus-priv
 
   // 12. Enable IP forwarding & NAT (Route wlan0 traffic out to WAN interface, e.g. eth0 or usb-tether)
   await runSudo("sysctl -w net.ipv4.ip_forward=1 || true");
-  const wanOut = await runSudo("ip route show default");
-  const match = wanOut.match(/dev\s+(\S+)/);
-  const wan_if = match ? match[1] : null;
-  if (wan_if && wan_if !== 'wlan0') {
-    // Standard NAT masquerade
-    await runSudo(`iptables -t nat -A POSTROUTING -o ${wan_if} -j MASQUERADE || true`);
-    
-    // Accept established WAN back to LAN
-    await runSudo(`iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT || true`);
+  
+  // Flush previous rules to prevent redundant chains or duplicate rules
+  await runSudo("iptables -F FORWARD || true");
+  await runSudo("iptables -t nat -F PREROUTING || true");
+  await runSudo("iptables -t nat -F POSTROUTING || true");
 
-    // Dynamic bypass rules: Accept traffic for authenticated clients (skip captive portal redirect)
-    const authData = loadAuthMacs();
-    for (const mac of Object.keys(authData)) {
-      await runSudo(`iptables -t nat -A PREROUTING -m mac --mac-source ${mac} -j RETURN || true`);
-      await runSudo(`iptables -A FORWARD -i wlan0 -o ${wan_if} -m mac --mac-source ${mac} -j ACCEPT || true`);
-    }
+  // Masquerade all outbound WAN traffic not destined back to the local AP network (any interface other than wlan0)
+  await runSudo("iptables -t nat -A POSTROUTING ! -o wlan0 -j MASQUERADE || true");
+  
+  // Accept established WAN back to LAN
+  await runSudo("iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT || true");
 
-    // Redirection rule: Redirect unauthenticated HTTP (TCP 80) traffic to local router port 3000 (Captive Portal)
-    await runSudo(`iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true`);
-
-    // Drop all other forward traffic for unauthenticated clients on wlan0
-    await runSudo(`iptables -A FORWARD -i wlan0 -o ${wan_if} -j DROP || true`);
+  // Dynamic bypass rules: Accept traffic for authenticated clients (skip captive portal redirect)
+  const authData = loadAuthMacs();
+  for (const mac of Object.keys(authData)) {
+    await runSudo(`iptables -t nat -A PREROUTING -m mac --mac-source ${mac} -j RETURN || true`);
+    await runSudo(`iptables -A FORWARD -i wlan0 ! -o wlan0 -m mac --mac-source ${mac} -j ACCEPT || true`);
   }
+
+  // Redirection rule: Redirect unauthenticated HTTP (TCP 80) traffic to local router port 3000 (Captive Portal)
+  await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true");
+
+  // Drop all other forward traffic for unauthenticated clients on wlan0 heading to WAN (anything not wlan0)
+  await runSudo("iptables -A FORWARD -i wlan0 ! -o wlan0 -j DROP || true");
 
   // 13. Restart dnsmasq AFTER wlan0 static IP is firmly assigned
   await runSudo("systemctl restart dnsmasq || true");
