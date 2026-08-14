@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Dashboard from './Dashboard';
 import DeviceList from './DeviceList';
+import NetworkMonitor from './NetworkMonitor';
 import NetworkSettings from './NetworkSettings';
 import WifiSettings from './WifiSettings';
 import RoutingSettings from './RoutingSettings';
@@ -31,6 +32,7 @@ export default function ClassicLayout({ onLogout }: { onLogout: () => void }) {
     switch (activeTab) {
       case 'dashboard': return <Dashboard />;
       case 'devices': return <DeviceList />;
+      case 'monitor': return <NetworkMonitor />;
       case 'network': return <NetworkSettings />;
       case 'wifi': return <WifiSettings />;
       case 'routing': return <RoutingSettings />;
@@ -65,7 +67,8 @@ export default function ClassicLayout({ onLogout }: { onLogout: () => void }) {
         <div className="w-[240px] bg-[#f4f4f4] border-r border-[#cccccc] overflow-y-auto flex-shrink-0 flex flex-col">
           <MenuCategory title="情報" items={[
             { id: 'dashboard', label: '機器状態・構成図' },
-            { id: 'devices', label: '接続端末一覧' }
+            { id: 'devices', label: '接続端末一覧' },
+            { id: 'monitor', label: 'ネットワーク監視 (新機能)' }
           ]} active={activeTab} onSelect={setActiveTab} />
           
           <MenuCategory title="基本設定" items={[

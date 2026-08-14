@@ -7,7 +7,8 @@ import { createServer as createViteServer } from 'vite';
 import { 
   getSysInfo, getConnectedDevices, loadConfig, saveConfig, 
   setWifiMode, setupWifiAP, blockMac, reloadRouting, runSudo, PORTAL_FILE, getMacFromIp,
-  loadAuthMacs, saveAuthMacs, addPortForward, runPing, getCmdLogs
+  loadAuthMacs, saveAuthMacs, addPortForward, runPing, getCmdLogs,
+  getNetworkMonitorStats, getDnsQueryLogs
 } from './server/network.ts';
 
 const PORT = 3000;
@@ -470,6 +471,26 @@ async function startServer() {
     }
   });
 
+  // Network traffic stats monitoring endpoint
+  app.get('/api/monitor/stats', requireAdmin, async (req, res) => {
+    try {
+      const stats = await getNetworkMonitorStats();
+      res.json(stats);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || 'Failed to fetch network traffic stats.' });
+    }
+  });
+
+  // DNS query log streaming endpoint
+  app.get('/api/monitor/dns-logs', requireAdmin, async (req, res) => {
+    try {
+      const logs = await getDnsQueryLogs();
+      res.json({ logs });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || 'Failed to fetch DNS query logs.' });
+    }
+  });
+
   // Portal Connect Endpoint with real hCaptcha / reCAPTCHA check
   app.post('/api/portal/connect', async (req, res) => {
     const config = loadConfig();
@@ -518,7 +539,7 @@ async function startServer() {
     await runSudo(`iptables -t nat -I PREROUTING ${insertPos} -m mac --mac-source ${mac} -j RETURN`);
     await runSudo(`iptables -I FORWARD 1 -m mac --mac-source ${mac} -j ACCEPT`);
     
-    res.send("<div style='font-family:sans-serif; text-align:center; margin-top:100px; color:#003399;'><h2>接続完了</h2><p>インターネットをご利用いただけます</p></div><script>setTimeout(()=>window.close(), 1500);</script>");
+    res.send("<div style='font-family:sans-serif; text-align:center; margin-top:100px; color:#003399;'><h2>接続完了 / Connected</h2><p>インターネットのご利用が可能になりました。</p><p style='color:#666; font-size:12px;'>自動的にインターネット接続検証用の204ページへリダイレクトされます...</p></div><script>setTimeout(()=>{ window.location.href = 'http://connectivitycheck.gstatic.com/generate_204'; }, 1000);</script>");
   });
 
   // Serve portal directly
