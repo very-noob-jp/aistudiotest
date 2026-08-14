@@ -465,6 +465,11 @@ export async function setWifiMode(mode: 'AP' | 'STA', ssid?: string, pwd?: strin
     await runSudo("sed -i '/# --- RPI-ROUTER-WLAN0-START ---/,/# --- RPI-ROUTER-WLAN0-END ---/d' /etc/dhcpcd.conf || true");
     await runSudo("sed -i '/interface wlan0/,+4d' /etc/dhcpcd.conf || true");
     await runSudo("rm -f /etc/NetworkManager/conf.d/99-unmanaged-devices.conf || true");
+
+    // Flush iptables rules that might have been left over from AP mode (Captive Portal)
+    await runSudo("iptables -F FORWARD || true");
+    await runSudo("iptables -t nat -F PREROUTING || true");
+    await runSudo("iptables -t nat -F POSTROUTING || true");
     
     // Fully enable and restart NetworkManager to force hardware re-discovery & clear cached unmanaged state
     await runSudo("systemctl enable NetworkManager || true");

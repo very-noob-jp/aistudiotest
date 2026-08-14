@@ -776,7 +776,14 @@ async function startServer() {
       return next();
     }
 
-    // If request is from our AP subnet and not the router itself
+    // If the Host header is an external domain (e.g. connectivitycheck.gstatic.com),
+    // it means iptables intercepted the request because the client is unauthenticated.
+    // We must redirect them to the portal, regardless of how req.ip is reported by the OS/Proxy.
+    if (hostHeader && !hostHeader.startsWith(lanIp) && !hostHeader.startsWith('localhost')) {
+       return res.redirect(`http://${lanIp}:3000/portal`);
+    }
+
+    // Fallback: If request is from our AP subnet and not the router itself
     if (ip.includes(lanSubnet) && !ip.includes('127.0.0.1') && ip !== lanIp) {
       try {
         const mac = await getMacFromIp(ip);

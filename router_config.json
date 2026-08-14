@@ -3,7 +3,7 @@
   "adblock_enabled": true,
   "dos_protection": true,
   "admin_password": "admin",
-  "wifi_mode": "STA",
+  "wifi_mode": "AP",
   "sta_ssid": "aterm-f66f7d-5p",
   "sta_pwd": "8af48b9599d9b",
   "strict_disconnect_relogin": true,
