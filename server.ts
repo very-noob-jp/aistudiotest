@@ -526,13 +526,13 @@ async function startServer() {
     try {
       let html = fs.readFileSync(PORTAL_FILE, 'utf-8');
       const config = loadConfig();
+      const isRe = config.captcha_provider === 'recaptcha';
+      const sitekey = config.captcha_site_key || (isRe ? "dummy_recaptcha_site" : "8dfae658-fe9c-4506-a682-71f07d4ce88a");
+      const scriptUrl = isRe ? `https://www.google.com/recaptcha/api.js` : `https://js.hcaptcha.com/1/api.js`;
+      const divClass = isRe ? `g-recaptcha` : `h-captcha`;
       
       if (config.captcha_invisible) {
         // Inject invisible captcha handling if enabled
-        const sitekey = config.captcha_site_key || (config.captcha_provider === 'recaptcha' ? "dummy_recaptcha_site" : "8dfae658-fe9c-4506-a682-71f07d4ce88a");
-        const isRe = config.captcha_provider === 'recaptcha';
-        const scriptUrl = isRe ? `https://www.google.com/recaptcha/api.js` : `https://js.hcaptcha.com/1/api.js`;
-        const divClass = isRe ? `g-recaptcha` : `h-captcha`;
         const actionPrefix = isRe ? `data-action="connect"` : ``;
         
         const autoForm = `
@@ -559,6 +559,31 @@ async function startServer() {
         </script>
         `;
         html = html.replace('</body>', `${autoForm}</body>`);
+      } else {
+        // Dynamic substitution for standard visible captcha
+        // 1. Replace hCaptcha library script with selected provider script
+        html = html.replace('https://js.hcaptcha.com/1/api.js', scriptUrl);
+        
+        // 2. Replace h-captcha widget class, data-sitekey, and data-callback
+        html = html.replace(
+          'class="h-captcha" data-sitekey="8dfae658-fe9c-4506-a682-71f07d4ce88a" data-callback="onHcaptchaSuccess"',
+          `class="${divClass}" data-sitekey="${sitekey}" data-callback="onCaptchaSuccess"`
+        );
+
+        // 3. Set up JavaScript bridge for the unified onCaptchaSuccess callback
+        const bridgeJs = `
+        <script>
+          function onCaptchaSuccess(token) {
+            onHcaptchaSuccess(token);
+          }
+        </script>
+        `;
+        html = html.replace('</head>', `${bridgeJs}</head>`);
+
+        // 4. Update form inputs to use correct POST parameters
+        if (isRe) {
+          html = html.replace('name="h-captcha-response"', 'name="g-recaptcha-response"');
+        }
       }
       
       res.send(html);

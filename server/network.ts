@@ -3,7 +3,9 @@ import util from 'util';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import dns from 'dns';
 
+const dnsPromises = dns.promises;
 const execAsync = util.promisify(exec);
 
 export const CONFIG_FILE = path.join(process.cwd(), 'router_config.json');
@@ -505,6 +507,32 @@ export async function blockMac(mac: string) {
   await runSudo(`iptables -I FORWARD -m mac --mac-source ${mac} -j DROP`);
 }
 
+export async function resolveWalledGardenIps(): Promise<string[]> {
+  const domains = [
+    'hcaptcha.com',
+    'js.hcaptcha.com',
+    'newassets.hcaptcha.com',
+    'imgs.hcaptcha.com',
+    'www.google.com',
+    'www.gstatic.com',
+    'recaptcha.net',
+    'www.recaptcha.net',
+    'apis.google.com'
+  ];
+  const ips = new Set<string>();
+  for (const domain of domains) {
+    try {
+      const resolved = await dnsPromises.resolve4(domain);
+      for (const ip of resolved) {
+        ips.add(ip);
+      }
+    } catch (e) {
+      // Ignore resolution errors for domain
+    }
+  }
+  return Array.from(ips);
+}
+
 export async function applyFirewallRules() {
   // Allow DHCP (UDP 67/68) and DNS (UDP/TCP 53) in iptables for wlan0
   await runSudo("iptables -D INPUT -i wlan0 -p udp --dport 67:68 -j ACCEPT || true");
@@ -528,6 +556,14 @@ export async function applyFirewallRules() {
   
   // Accept established WAN back to LAN
   await runSudo("iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT || true");
+
+  // Setup Walled Garden: Allow access to Captcha CDN domains before authentication
+  try {
+    const captchaIps = await resolveWalledGardenIps();
+    for (const ip of captchaIps) {
+      await runSudo(`iptables -A FORWARD -i wlan0 -d ${ip} -j ACCEPT || true`);
+    }
+  } catch (err) {}
 
   // Dynamic bypass rules: Accept traffic for authenticated clients (skip captive portal redirect)
   const authData = loadAuthMacs();
