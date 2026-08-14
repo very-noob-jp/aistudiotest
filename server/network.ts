@@ -606,6 +606,33 @@ export async function reloadRouting() {
   await applyFirewallRules();
 }
 
+
+export async function applyQoS(enabled: boolean, downMbps: string, upMbps: string) {
+  const iface = "wlan0";
+  
+  // Clear existing QoS rules
+  await runSudo(`tc qdisc del dev ${iface} root || true`);
+  await runSudo(`tc qdisc del dev ${iface} ingress || true`);
+
+  if (!enabled) return;
+
+  const downMbit = parseInt(downMbps);
+  const upMbit = parseInt(upMbps);
+
+  if (isNaN(downMbit) || isNaN(upMbit) || (downMbit === 0 && upMbit === 0)) return;
+
+  // Egress (Router -> Client, so this is "Download" for the client)
+  if (downMbit > 0) {
+    await runSudo(`tc qdisc add dev ${iface} root tbf rate ${downMbit}mbit burst 32kbit latency 400ms`);
+  }
+
+  // Ingress (Client -> Router, so this is "Upload" for the client)
+  if (upMbit > 0) {
+    await runSudo(`tc qdisc add dev ${iface} handle ffff: ingress`);
+    await runSudo(`tc filter add dev ${iface} parent ffff: protocol ip prio 50 u32 match ip src 0.0.0.0/0 police rate ${upMbit}mbit burst 32kbit drop flowid :1`);
+  }
+}
+
 export async function addPortForward(src_port: string, dest_ip: string, dest_port: string) {
   const wanOut = await runSudo("ip route show default");
   const match = wanOut.match(/dev\s+(\S+)/);

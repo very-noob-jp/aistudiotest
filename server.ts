@@ -7,7 +7,7 @@ import { createServer as createViteServer } from 'vite';
 import { 
   getSysInfo, getConnectedDevices, loadConfig, saveConfig, 
   setWifiMode, setupWifiAP, blockMac, reloadRouting, runSudo, PORTAL_FILE, getMacFromIp,
-  loadAuthMacs, saveAuthMacs, addPortForward, runPing, getCmdLogs,
+  loadAuthMacs, saveAuthMacs, addPortForward, applyQoS, runPing, getCmdLogs,
   getNetworkMonitorStats, getDnsQueryLogs
 } from './server/network.ts';
 
@@ -231,7 +231,7 @@ async function startServer() {
     const config = loadConfig();
     Object.assign(config, { qos_enabled, qos_download, qos_upload });
     saveConfig(config);
-    // In real deployment, this would use `tc` to shape traffic on eth0/wlan0
+    await applyQoS(qos_enabled, qos_download, qos_upload);
     res.json({ success: true });
   });
 
@@ -825,6 +825,10 @@ async function startServer() {
     });
   }
 
+  // Apply initial QoS on startup
+  const initConfig = loadConfig();
+  applyQoS(initConfig.qos_enabled, initConfig.qos_download, initConfig.qos_upload).catch(console.error);
+  
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
