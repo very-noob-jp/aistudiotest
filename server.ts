@@ -770,6 +770,12 @@ async function startServer() {
     const lanIp = config.lan_ip || "192.168.4.1";
     const lanSubnet = lanIp.substring(0, lanIp.lastIndexOf('.')); // e.g., "192.168.4"
 
+    const hostHeader = req.headers.host || "";
+    // If the user is explicitly accessing the router's IP, let them access the dashboard directly
+    if (hostHeader.startsWith(lanIp) || hostHeader.startsWith('localhost')) {
+      return next();
+    }
+
     // If request is from our AP subnet and not the router itself
     if (ip.includes(lanSubnet) && !ip.includes('127.0.0.1') && ip !== lanIp) {
       try {
@@ -789,6 +795,12 @@ async function startServer() {
       }
     }
 
+    next();
+  });
+
+  // Bypass Vite 6 host validation by rewriting the Host header for all incoming requests reaching the SPA
+  app.use((req, res, next) => {
+    req.headers.host = 'localhost';
     next();
   });
 
