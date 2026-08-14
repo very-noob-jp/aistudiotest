@@ -558,6 +558,52 @@ async function startServer() {
     }
   });
 
+  // --- Captive Portal Redirection Middleware ---
+  app.use(async (req, res, next) => {
+    const p = req.path;
+    // Do not intercept captive portal assets, direct requests, or config APIs
+    if (
+      p.startsWith('/portal') || 
+      p.startsWith('/api/portal') || 
+      p.startsWith('/api/config') ||
+      p.startsWith('/api/auth') || // Allow login checks
+      p.includes('.') // Skip files like standard .js, .css, .png
+    ) {
+      return next();
+    }
+
+    const config = loadConfig();
+    if (config.wifi_mode !== 'AP') {
+      return next();
+    }
+
+    // Identify if the request came from wlan0 interface subnet
+    const ip = req.ip || req.socket.remoteAddress || "";
+    const lanIp = config.lan_ip || "192.168.4.1";
+    const lanSubnet = lanIp.substring(0, lanIp.lastIndexOf('.')); // e.g., "192.168.4"
+
+    // If request is from our AP subnet and not the router itself
+    if (ip.includes(lanSubnet) && !ip.includes('127.0.0.1') && ip !== lanIp) {
+      try {
+        const mac = await getMacFromIp(ip);
+        if (mac) {
+          const authData = loadAuthMacs();
+          // Redirect unauthenticated clients to Captive Portal page
+          if (!authData[mac]) {
+            return res.redirect(`http://${lanIp}:3000/portal`);
+          }
+        } else {
+          // If MAC is not found yet, redirect to portal to trigger authentication
+          return res.redirect(`http://${lanIp}:3000/portal`);
+        }
+      } catch (e) {
+        console.error("Captive portal redirection error:", e);
+      }
+    }
+
+    next();
+  });
+
   // --- Vite Middleware or Static Files ---
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
