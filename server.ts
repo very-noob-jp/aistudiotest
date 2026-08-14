@@ -460,6 +460,16 @@ async function startServer() {
     }
   });
 
+  app.post('/api/portal/reset', requireAdmin, async (req, res) => {
+    try {
+      saveAuthMacs({});
+      await reloadRouting();
+      res.json({ success: true, message: 'All portal sessions have been cleared.' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || 'Failed to clear sessions' });
+    }
+  });
+
   // Portal Connect Endpoint with real hCaptcha / reCAPTCHA check
   app.post('/api/portal/connect', async (req, res) => {
     const config = loadConfig();

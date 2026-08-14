@@ -74,6 +74,9 @@ export interface RouterConfig {
   local_dns_enabled?: boolean;
   local_dns_name?: string;
 
+  // Captive Portal Lease
+  session_timeout?: number;
+
   // Additional Enterprise Features
   wg_enabled?: boolean;
   wg_port?: string;

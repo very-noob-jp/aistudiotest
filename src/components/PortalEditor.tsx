@@ -25,11 +25,19 @@ export default function PortalEditor() {
           captcha_provider: config.captcha_provider,
           captcha_site_key: config.captcha_site_key,
           captcha_secret_key: config.captcha_secret_key,
-          captcha_invisible: config.captcha_invisible
+          captcha_invisible: config.captcha_invisible,
+          session_timeout: Number(config.session_timeout || 15)
         })
       });
     }
     alert('ポータル設定を保存しました。');
+  };
+
+  const handleClearSessions = async () => {
+    if (confirm('現在認証中のすべての端末セッションを強制終了（ログアウト）させますか？')) {
+      await fetch('/api/portal/reset', { method: 'POST' });
+      alert('すべてのセッションを強制終了しました。端末から再接続、またはWeb閲覧時に再度キャプティブポータルが表示されます。');
+    }
   };
 
   return (
@@ -37,6 +45,9 @@ export default function PortalEditor() {
       <h2 className="text-[16px] text-[#003399] border-l-[5px] border-l-[#003399] pl-2.5 border-b border-[#cccccc] pb-1 mt-0 mb-4 font-bold flex justify-between items-center shrink-0">
         <span>キャプティブポータル・認証設定</span>
         <div className="flex gap-2">
+          <button onClick={handleClearSessions} className="bg-[#cc0000] border border-[#990000] hover:bg-[#aa0000] px-3 py-1 text-xs text-white">
+            認証セッションを一括クリア
+          </button>
           <button onClick={() => setPreview(!preview)} className="bg-[#eeeeee] border border-[#888888] hover:bg-[#dddddd] px-3 py-1 text-xs font-normal text-black">
             {preview ? 'コード編集に戻る' : 'プレビュー表示'}
           </button>
@@ -77,6 +88,13 @@ export default function PortalEditor() {
                 <th className="border border-[#cccccc] bg-[#eef3f6] w-[30%] text-left p-2 font-normal">Secret Key</th>
                 <td className="border border-[#cccccc] p-2">
                   <input type="password" value={config.captcha_secret_key || ''} onChange={e=>setConfig({...config, captcha_secret_key: e.target.value})} className="border border-[#aaa] p-1 w-[80%] font-mono" placeholder="デフォルトキーを使用" />
+                </td>
+              </tr>
+              <tr>
+                <th className="border border-[#cccccc] bg-[#eef3f6] w-[30%] text-left p-2 font-normal">セッション有効期限 (分)</th>
+                <td className="border border-[#cccccc] p-2">
+                  <input type="number" value={config.session_timeout || 15} onChange={e=>setConfig({...config, session_timeout: Number(e.target.value)})} className="border border-[#aaa] p-1 w-[80px]" min={1} /> 分間
+                  <span className="text-xs text-[#666] ml-2">（※この時間を過ぎると自動的にログアウトされ、再びポータル画面が表示されます。検証用には 1分 や 2分 に設定可能です。）</span>
                 </td>
               </tr>
             </tbody>
