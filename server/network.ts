@@ -465,11 +465,18 @@ export async function setWifiMode(mode: 'AP' | 'STA', ssid?: string, pwd?: strin
     await runSudo("sed -i '/# --- RPI-ROUTER-WLAN0-START ---/,/# --- RPI-ROUTER-WLAN0-END ---/d' /etc/dhcpcd.conf || true");
     await runSudo("sed -i '/interface wlan0/,+4d' /etc/dhcpcd.conf || true");
     await runSudo("rm -f /etc/NetworkManager/conf.d/99-unmanaged-devices.conf || true");
-    await runSudo("systemctl reload NetworkManager || true");
-    await runSudo("systemctl reload dhcpcd || true");
+    
+    // Fully enable and restart NetworkManager to force hardware re-discovery & clear cached unmanaged state
+    await runSudo("systemctl enable NetworkManager || true");
+    await runSudo("systemctl restart NetworkManager || true");
+    await runSudo("systemctl restart dhcpcd || systemctl reload dhcpcd || true");
+    
+    // Critical 2.5-second pause to let the NetworkManager daemon fully initialize and register interfaces
+    await new Promise(resolve => setTimeout(resolve, 2500));
 
-    // 4. Enable NetworkManager management for wlan0
+    // 4. Force NetworkManager management to active state for wlan0
     await runSudo("nmcli device set wlan0 managed yes || true");
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     // 5. Reset wlan0 interface link and flush static AP IP
     await runSudo("ip addr flush dev wlan0 || true");

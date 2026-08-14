@@ -539,7 +539,133 @@ async function startServer() {
     await runSudo(`iptables -t nat -I PREROUTING ${insertPos} -m mac --mac-source ${mac} -j RETURN`);
     await runSudo(`iptables -I FORWARD 1 -m mac --mac-source ${mac} -j ACCEPT`);
     
-    res.send("<div style='font-family:sans-serif; text-align:center; margin-top:100px; color:#003399;'><h2>接続完了 / Connected</h2><p>インターネットのご利用が可能になりました。</p><p style='color:#666; font-size:12px;'>自動的にインターネット接続検証用の204ページへリダイレクトされます...</p></div><script>setTimeout(()=>{ window.location.href = 'http://connectivitycheck.gstatic.com/generate_204'; }, 1000);</script>");
+    res.send(`
+    <html lang="ja">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>接続完了 / Connected</title>
+      <style>
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+          background-color: #f7fafc;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          margin: 0;
+          color: #2d3748;
+        }
+        .card {
+          background: white;
+          padding: 2.5rem;
+          border-radius: 16px;
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+          text-align: center;
+          max-width: 420px;
+          width: 90%;
+        }
+        .checkmark-container {
+          width: 72px;
+          height: 72px;
+          background-color: #def7ec;
+          color: #03543f;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: 0 auto 1.5rem;
+        }
+        .checkmark {
+          width: 36px;
+          height: 36px;
+          stroke-width: 3;
+          stroke: currentColor;
+          fill: none;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+        }
+        h2 {
+          margin: 0 0 0.5rem 0;
+          color: #03543f;
+          font-size: 1.5rem;
+          font-weight: 700;
+        }
+        p {
+          color: #4a5568;
+          font-size: 0.95rem;
+          line-height: 1.5;
+          margin: 0 0 1.5rem 0;
+        }
+        .status {
+          font-size: 0.75rem;
+          color: #718096;
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+        .loader {
+          border: 2px stroke #e2e8f0;
+          border-top: 2px solid #3182ce;
+          border-radius: 50%;
+          width: 16px;
+          height: 16px;
+          animation: spin 1s linear infinite;
+          margin: 0 auto 0.5rem;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="checkmark-container">
+          <svg class="checkmark" viewBox="0 0 24 24">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        </div>
+        <h2>接続完了 / Connected</h2>
+        <p>インターネットのご利用が可能になりました。<br>自動的にネットワークに接続を確立しています...</p>
+        
+        <div class="status">
+          <div class="loader"></div>
+          <div>Wi-Fi接続チェックを同期中...</div>
+        </div>
+      </div>
+
+      <script>
+        // Multiple OS probe URLs to clear the exclamation mark on all devices (Google, Apple, Microsoft)
+        const probes = [
+          'http://connectivitycheck.gstatic.com/generate_204',
+          'http://connectivitycheck.android.com/generate_204',
+          'http://clients3.google.com/generate_204',
+          'http://captive.apple.com/hotspot-detect.html',
+          'http://www.apple.com/library/test/success.html',
+          'http://www.msftconnecttest.com/connecttest.txt',
+          'http://www.msftncsi.com/ncsi.txt'
+        ];
+
+        // Perform parallel fetching/pinging of all connectivity endpoints to verify state
+        probes.forEach(url => {
+          fetch(url, { mode: 'no-cors', cache: 'no-store' })
+            .then(() => console.log('Probed: ' + url))
+            .catch(() => {
+              // fallback with image request
+              const img = new Image();
+              img.src = url + '?t=' + Date.now();
+            });
+        });
+
+        // Automatically close portal or redirect after 2 seconds
+        setTimeout(() => {
+          window.location.href = 'http://connectivitycheck.gstatic.com/generate_204';
+        }, 2000);
+      </script>
+    </body>
+    </html>
+    `);
   });
 
   // Serve portal directly
