@@ -566,7 +566,7 @@ async function startServer() {
       p.startsWith('/api/portal') || 
       p.startsWith('/api/config') ||
       p.startsWith('/api/auth') || // Allow login checks
-      p.includes('.') // Skip files like standard .js, .css, .png
+      /\.(js|css|png|jpg|jpeg|gif|ico|svg|json|woff2?|ttf|map)$/i.test(p) // Skip static assets but NOT captive portal HTML/TXT checks
     ) {
       return next();
     }
