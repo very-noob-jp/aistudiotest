@@ -682,8 +682,15 @@ async function startServer() {
         // Inject invisible captcha handling if enabled
         const actionPrefix = isRe ? `data-action="connect"` : ``;
         
+        // Remove the original captcha widget
+        html = html.replace(
+          '<div class="h-captcha" data-sitekey="8dfae658-fe9c-4506-a682-71f07d4ce88a" data-callback="onHcaptchaSuccess"></div>',
+          ''
+        );
+        html = html.replace('<script src="https://js.hcaptcha.com/1/api.js" async defer></script>', '');
+        
         const autoForm = `
-        <form id="auto-captcha-form" action="/api/portal/connect" method="POST">
+        <form id="auto-captcha-form" action="/api/portal/connect" method="POST" style="display:none;">
           <div class="${divClass}" data-sitekey="${sitekey}" data-callback="onSubmit" data-size="invisible" ${actionPrefix}></div>
         </form>
         <script src="${scriptUrl}" async defer></script>

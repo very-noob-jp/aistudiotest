@@ -527,16 +527,27 @@ export async function resolveWalledGardenIps(): Promise<string[]> {
     'apis.google.com'
   ];
   const ips = new Set<string>();
-  for (const domain of domains) {
+  
+  const resolveWithTimeout = async (domain: string) => {
     try {
-      const resolved = await dnsPromises.resolve4(domain);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const resolved = await Promise.race([
+        dnsPromises.resolve4(domain),
+        new Promise<string[]>((_, reject) => {
+          controller.signal.addEventListener('abort', () => reject(new Error('timeout')));
+        })
+      ]);
+      clearTimeout(timeoutId);
       for (const ip of resolved) {
         ips.add(ip);
       }
     } catch (e) {
-      // Ignore resolution errors for domain
+      // Ignore resolution errors or timeouts
     }
-  }
+  };
+
+  await Promise.all(domains.map(domain => resolveWithTimeout(domain)));
   return Array.from(ips);
 }
 
