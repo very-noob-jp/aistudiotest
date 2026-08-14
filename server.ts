@@ -535,9 +535,8 @@ async function startServer() {
     authData[mac] = Date.now();
     saveAuthMacs(authData);
     
-    const insertPos = config.adblock_enabled ? "3" : "1";
-    await runSudo(`iptables -t nat -I PREROUTING ${insertPos} -m mac --mac-source ${mac} -j RETURN`);
-    await runSudo(`iptables -I FORWARD 1 -m mac --mac-source ${mac} -j ACCEPT`);
+    // Refresh iptables rules safely instead of a fragile positional insert
+    await reloadRouting();
     
     res.send(`
     <html lang="ja">
