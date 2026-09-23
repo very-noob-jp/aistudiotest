@@ -696,12 +696,15 @@ async function startServer() {
       const config = loadConfig();
       const isRe = config.captcha_provider === 'recaptcha';
       const sitekey = config.captcha_site_key || (isRe ? "dummy_recaptcha_site" : "8dfae658-fe9c-4506-a682-71f07d4ce88a");
-      const scriptUrl = isRe ? `https://www.google.com/recaptcha/api.js` : `https://js.hcaptcha.com/1/api.js`;
-      const divClass = isRe ? `g-recaptcha` : `h-captcha`;
+      // Use official global mirror recaptcha.net for bulletproof loading on game consoles (Switch/Switch 2) & restricted nets
+      const scriptUrl = isRe 
+        ? `https://www.recaptcha.net/recaptcha/api.js?onload=onRecaptchaLoaded&render=explicit` 
+        : `https://js.hcaptcha.com/1/api.js?onload=onHcaptchaLoaded&render=explicit`;
       
       if (config.captcha_invisible) {
         // Inject invisible captcha handling if enabled
         const actionPrefix = isRe ? `data-action="connect"` : ``;
+        const divClass = isRe ? `g-recaptcha` : `h-captcha`;
         
         // Remove the original captcha widget
         html = html.replace(
@@ -727,7 +730,6 @@ async function startServer() {
                  ${isRe ? `grecaptcha.execute();` : `hcaptcha.execute();`}
                };
              } else {
-               // Auto execute if no button
                ${isRe ? `grecaptcha.execute();` : `hcaptcha.execute();`}
              }
           }
@@ -735,27 +737,63 @@ async function startServer() {
         `;
         html = html.replace('</body>', `${autoForm}</body>`);
       } else {
-        // Dynamic substitution for standard visible captcha
-        // 1. Replace hCaptcha library script with selected provider script
-        html = html.replace('https://js.hcaptcha.com/1/api.js', scriptUrl);
+        // Dynamic substitution for standard visible captcha with explicit render & fallback
+        // 1. Replace original script tag with explicit loader
+        html = html.replace('<script src="https://js.hcaptcha.com/1/api.js" async defer></script>', `<script src="${scriptUrl}" async defer></script>`);
         
-        // 2. Replace h-captcha widget class, data-sitekey, and data-callback
-        html = html.replace(
-          'class="h-captcha" data-sitekey="8dfae658-fe9c-4506-a682-71f07d4ce88a" data-callback="onHcaptchaSuccess"',
-          `class="${divClass}" data-sitekey="${sitekey}" data-callback="onCaptchaSuccess"`
-        );
-
-        // 3. Set up JavaScript bridge for the unified onCaptchaSuccess callback
+        // 2. Set up JavaScript bridge for explicit rendering and fast loading
         const bridgeJs = `
         <script>
+          var captchaWidgetId = null;
+          function hideCaptchaLoading() {
+            var loader = document.getElementById('captcha-loading-indicator');
+            if (loader) loader.style.display = 'none';
+          }
           function onCaptchaSuccess(token) {
             onHcaptchaSuccess(token);
           }
+          function renderCaptchaWidget() {
+            var target = document.getElementById('captcha-render-target');
+            if (!target) return;
+            if (captchaWidgetId !== null) return;
+            try {
+              if (${isRe} && typeof grecaptcha !== 'undefined' && grecaptcha.render) {
+                target.innerHTML = '';
+                captchaWidgetId = grecaptcha.render(target, {
+                  sitekey: '${sitekey}',
+                  callback: onCaptchaSuccess
+                });
+                hideCaptchaLoading();
+              } else if (!${isRe} && typeof hcaptcha !== 'undefined' && hcaptcha.render) {
+                target.innerHTML = '';
+                captchaWidgetId = hcaptcha.render(target, {
+                  sitekey: '${sitekey}',
+                  callback: onCaptchaSuccess
+                });
+                hideCaptchaLoading();
+              }
+            } catch(e) {
+              console.error("Captcha render error:", e);
+            }
+          }
+          window.onRecaptchaLoaded = function() {
+            renderCaptchaWidget();
+          };
+          window.onHcaptchaLoaded = function() {
+            renderCaptchaWidget();
+          };
+          window.onModalOpen = function() {
+            renderCaptchaWidget();
+          };
+          // Fallback timer in case onload fired early
+          setTimeout(function() {
+            renderCaptchaWidget();
+          }, 1000);
         </script>
         `;
         html = html.replace('</head>', `${bridgeJs}</head>`);
 
-        // 4. Update form inputs to use correct POST parameters
+        // 3. Update form inputs to use correct POST parameters
         if (isRe) {
           html = html.replace('name="h-captcha-response"', 'name="g-recaptcha-response"');
         }
@@ -864,19 +902,26 @@ ok
     const lanSubnet = lanIp.substring(0, lanIp.lastIndexOf('.')); // e.g., "192.168.4"
 
     const hostHeader = (req.headers.host || "").toLowerCase();
+    const hostName = hostHeader.split(':')[0];
     const localDnsName = (config.local_dns_enabled && config.local_dns_name) ? config.local_dns_name.toLowerCase().trim() : "";
 
-    // If the user is explicitly accessing the router's IP, localhost, or configured local DNS name, let them access dashboard
-    if (
-      hostHeader.startsWith(lanIp) || 
-      hostHeader.startsWith('localhost') || 
-      (localDnsName && hostHeader.startsWith(localDnsName))
-    ) {
+    // If the user is explicitly accessing the router's IP, localhost, or configured local DNS name (e.g. pifi.me), allow dashboard
+    const isLocalAccess = 
+      hostName === lanIp || 
+      hostName === 'localhost' || 
+      hostName === '127.0.0.1' ||
+      (localDnsName && (
+        hostName === localDnsName || 
+        hostName === `www.${localDnsName}` || 
+        hostName.endsWith(`.${localDnsName}`)
+      ));
+
+    if (isLocalAccess) {
       return next();
     }
 
     // If the Host header is an external domain, iptables intercepted the request because client is unauthenticated
-    if (hostHeader && !hostHeader.startsWith(lanIp) && !hostHeader.startsWith('localhost') && (!localDnsName || !hostHeader.startsWith(localDnsName))) {
+    if (!isLocalAccess) {
        return res.redirect(`http://${lanIp}:3000/portal`);
     }
 
@@ -930,6 +975,16 @@ ok
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+
+  // Attempt to also listen on port 80 directly if running with sufficient privileges
+  try {
+    const port80Server = app.listen(80, "0.0.0.0", () => {
+      console.log(`Port 80 listener active for local domains (e.g. http://pifi.me)`);
+    });
+    port80Server.on('error', () => {
+      // Port 80 binding error (e.g. non-root or already bound) is safely ignored because iptables redirects port 80 to PORT
+    });
+  } catch (e) {}
 }
 
 startServer();

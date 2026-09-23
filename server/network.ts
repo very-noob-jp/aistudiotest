@@ -193,8 +193,8 @@ export function loadConfig() {
     captcha_site_key: "",
     captcha_secret_key: "",
     captcha_invisible: false,
-    local_dns_enabled: false,
-    local_dns_name: "pi.router",
+    local_dns_enabled: true,
+    local_dns_name: "pifi.me",
     wg_enabled: false,
     wg_port: "51820",
     syslog_server: "",
@@ -527,11 +527,20 @@ export async function resolveWalledGardenIps(): Promise<string[]> {
     'js.hcaptcha.com',
     'newassets.hcaptcha.com',
     'imgs.hcaptcha.com',
-    'www.google.com',
-    'www.gstatic.com',
+    'api.hcaptcha.com',
+    'api2.hcaptcha.com',
+    'assets.hcaptcha.com',
     'recaptcha.net',
     'www.recaptcha.net',
-    'apis.google.com'
+    'google.com',
+    'www.google.com',
+    'gstatic.com',
+    'www.gstatic.com',
+    'fonts.gstatic.com',
+    'fonts.googleapis.com',
+    'apis.google.com',
+    'ssl.gstatic.com',
+    'recaptcha.google.com'
   ];
   const ips = new Set<string>();
   
@@ -559,6 +568,9 @@ export async function resolveWalledGardenIps(): Promise<string[]> {
 }
 
 export async function applyFirewallRules() {
+  const config = loadConfig();
+  const lanIp = config.lan_ip || "192.168.4.1";
+
   // Allow DHCP (UDP 67/68) and DNS (UDP/TCP 53) in iptables for wlan0
   await runSudo("iptables -D INPUT -i wlan0 -p udp --dport 67:68 -j ACCEPT || true");
   await runSudo("iptables -D INPUT -i wlan0 -p udp --dport 53 -j ACCEPT || true");
@@ -582,7 +594,35 @@ export async function applyFirewallRules() {
   // Accept established WAN back to LAN
   await runSudo("iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT || true");
 
-  // Setup Walled Garden: Allow access to Captcha CDN domains before authentication
+  // 1. ALWAYS redirect port 80 requests destined to router LAN IP to port 3000 (whether client is authenticated or not)
+  // This ensures custom domain (pifi.me) and router IP access on port 80 directly reaches Web UI
+  await runSudo(`iptables -t nat -A PREROUTING -i wlan0 -d ${lanIp} -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true`);
+
+  // 2. Setup Walled Garden: Allow access to Captcha CDN subnets and resolved domains before authentication
+  // Major Google IP ranges (AS15169) for reCAPTCHA v2 / gstatic.com
+  const googleCidrs = [
+    '142.250.0.0/15',
+    '172.217.0.0/16',
+    '216.58.192.0/19',
+    '173.194.0.0/16',
+    '74.125.0.0/16',
+    '64.233.160.0/19',
+    '209.85.128.0/17'
+  ];
+  for (const cidr of googleCidrs) {
+    await runSudo(`iptables -A FORWARD -i wlan0 -d ${cidr} -j ACCEPT || true`);
+  }
+
+  // Major Cloudflare IP ranges for hCaptcha
+  const cfCidrs = [
+    '104.16.0.0/12',
+    '172.64.0.0/13',
+    '198.41.128.0/17'
+  ];
+  for (const cidr of cfCidrs) {
+    await runSudo(`iptables -A FORWARD -i wlan0 -d ${cidr} -j ACCEPT || true`);
+  }
+
   try {
     const captchaIps = await resolveWalledGardenIps();
     for (const ip of captchaIps) {
@@ -590,17 +630,17 @@ export async function applyFirewallRules() {
     }
   } catch (err) {}
 
-  // Dynamic bypass rules: Accept traffic for authenticated clients (skip captive portal redirect)
+  // 3. Dynamic bypass rules: Accept traffic for authenticated clients (skip captive portal redirect)
   const authData = loadAuthMacs();
   for (const mac of Object.keys(authData)) {
     await runSudo(`iptables -t nat -A PREROUTING -m mac --mac-source ${mac} -j RETURN || true`);
     await runSudo(`iptables -A FORWARD -i wlan0 ! -o wlan0 -m mac --mac-source ${mac} -j ACCEPT || true`);
   }
 
-  // Redirection rule: Redirect unauthenticated HTTP (TCP 80) traffic to local router port 3000 (Captive Portal)
+  // 4. Redirection rule: Redirect unauthenticated HTTP (TCP 80) traffic to local router port 3000 (Captive Portal)
   await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true");
 
-  // Drop all other forward traffic for unauthenticated clients on wlan0 heading to WAN (anything not wlan0)
+  // 5. Drop all other forward traffic for unauthenticated clients on wlan0 heading to WAN (anything not wlan0)
   await runSudo("iptables -A FORWARD -i wlan0 ! -o wlan0 -j DROP || true");
 }
 
@@ -659,11 +699,11 @@ export async function applyLocalDns(enabled?: boolean, name?: string, lanIp?: st
 
   if (dnsEnabled && dnsName) {
     const cleanName = dnsName.trim();
-    // 1. Write dnsmasq local address configuration
-    await runSudo(`bash -c 'mkdir -p /etc/dnsmasq.d && echo "address=/${cleanName}/${ip}" > /etc/dnsmasq.d/router_local.conf' || true`);
+    // 1. Write dnsmasq local address configuration with wildcards
+    await runSudo(`bash -c 'mkdir -p /etc/dnsmasq.d && echo -e "address=/${cleanName}/${ip}\\naddress=/.${cleanName}/${ip}" > /etc/dnsmasq.d/router_local.conf' || true`);
     // 2. Add or update in /etc/hosts for bulletproof OS & internal resolution
     await runSudo(`sed -i '/# --- RPI-ROUTER-LOCAL-DNS ---/,/# --- RPI-ROUTER-LOCAL-DNS-END ---/d' /etc/hosts || true`);
-    await runSudo(`bash -c 'echo -e "\\n# --- RPI-ROUTER-LOCAL-DNS ---\\n${ip} ${cleanName}\\n# --- RPI-ROUTER-LOCAL-DNS-END ---" >> /etc/hosts' || true`);
+    await runSudo(`bash -c 'echo -e "\\n# --- RPI-ROUTER-LOCAL-DNS ---\\n${ip} ${cleanName} www.${cleanName}\\n# --- RPI-ROUTER-LOCAL-DNS-END ---" >> /etc/hosts' || true`);
   } else {
     await runSudo(`rm -f /etc/dnsmasq.d/router_local.conf || true`);
     await runSudo(`sed -i '/# --- RPI-ROUTER-LOCAL-DNS ---/,/# --- RPI-ROUTER-LOCAL-DNS-END ---/d' /etc/hosts || true`);

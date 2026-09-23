@@ -96,9 +96,9 @@ export default function NetworkSettings() {
           </table>
 
         <h2 className="text-[16px] text-[#003399] border-l-[5px] border-l-[#003399] pl-2.5 border-b border-[#cccccc] pb-1 mt-0 mb-4 font-bold">
-          ローカルDNS設定 (名前解決)
+          ローカルDNS設定 (カスタムドメイン名前解決)
         </h2>
-          <p className="mb-4 text-xs">ルーターの管理画面にIPアドレスの代わりにお好きな名前（例: router.local）でアクセスできるようにします。</p>
+          <p className="mb-4 text-xs">ルーターの管理画面にIPアドレス（192.168.4.1）の代わりに、お好きなカスタムドメイン（例: <b>pifi.me</b>, <b>aterm.me</b>, <b>pi.router</b>）でアクセスできるようにします。ポート番号（:3000）を省略しても開けます。</p>
           <table className="w-full border-collapse border border-[#cccccc] bg-white text-[13px] mb-4">
             <tbody>
               <tr>
@@ -110,9 +110,10 @@ export default function NetworkSettings() {
               </tr>
               {config.local_dns_enabled && (
                 <tr>
-                  <th className="border border-[#cccccc] bg-[#eef3f6] w-[30%] text-left p-2 font-normal">ホスト名</th>
+                  <th className="border border-[#cccccc] bg-[#eef3f6] w-[30%] text-left p-2 font-normal">ホスト名 (ドメイン名)</th>
                   <td className="border border-[#cccccc] p-2">
-                    <input type="text" value={config.local_dns_name || ''} onChange={e=>setConfig({...config, local_dns_name: e.target.value})} className="border border-[#aaa] p-1 w-[50%]" required placeholder="例: aterm.me, pi.router" />
+                    <input type="text" value={config.local_dns_name || ''} onChange={e=>setConfig({...config, local_dns_name: e.target.value})} className="border border-[#aaa] p-1 w-[50%]" required placeholder="例: pifi.me, aterm.me, pi.router" />
+                    <span className="ml-2 text-xs text-gray-500">※ ブラウザで http://{config.local_dns_name || 'pifi.me'} と入力して開けます</span>
                   </td>
                 </tr>
               )}
