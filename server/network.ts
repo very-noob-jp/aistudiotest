@@ -532,15 +532,11 @@ export async function resolveWalledGardenIps(): Promise<string[]> {
     'assets.hcaptcha.com',
     'recaptcha.net',
     'www.recaptcha.net',
-    'google.com',
-    'www.google.com',
-    'gstatic.com',
     'www.gstatic.com',
     'fonts.gstatic.com',
     'fonts.googleapis.com',
     'apis.google.com',
-    'ssl.gstatic.com',
-    'recaptcha.google.com'
+    'ssl.gstatic.com'
   ];
   const ips = new Set<string>();
   
@@ -598,49 +594,27 @@ export async function applyFirewallRules() {
   // This ensures custom domain (pifi.me) and router IP access on port 80 directly reaches Web UI
   await runSudo(`iptables -t nat -A PREROUTING -i wlan0 -d ${lanIp} -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true`);
 
-  // 2. Setup Walled Garden: Allow access to Captcha CDN subnets and resolved domains before authentication
-  // Major Google IP ranges (AS15169) for reCAPTCHA v2 / gstatic.com
-  const googleCidrs = [
-    '142.250.0.0/15',
-    '172.217.0.0/16',
-    '216.58.192.0/19',
-    '173.194.0.0/16',
-    '74.125.0.0/16',
-    '64.233.160.0/19',
-    '209.85.128.0/17'
-  ];
-  for (const cidr of googleCidrs) {
-    await runSudo(`iptables -A FORWARD -i wlan0 -d ${cidr} -j ACCEPT || true`);
-  }
-
-  // Major Cloudflare IP ranges for hCaptcha
-  const cfCidrs = [
-    '104.16.0.0/12',
-    '172.64.0.0/13',
-    '198.41.128.0/17'
-  ];
-  for (const cidr of cfCidrs) {
-    await runSudo(`iptables -A FORWARD -i wlan0 -d ${cidr} -j ACCEPT || true`);
-  }
-
-  try {
-    const captchaIps = await resolveWalledGardenIps();
-    for (const ip of captchaIps) {
-      await runSudo(`iptables -A FORWARD -i wlan0 -d ${ip} -j ACCEPT || true`);
-    }
-  } catch (err) {}
-
-  // 3. Dynamic bypass rules: Accept traffic for authenticated clients (skip captive portal redirect)
+  // 2. Dynamic bypass rules: Accept ALL forward and NAT traffic for authenticated clients
   const authData = loadAuthMacs();
   for (const mac of Object.keys(authData)) {
     await runSudo(`iptables -t nat -A PREROUTING -m mac --mac-source ${mac} -j RETURN || true`);
     await runSudo(`iptables -A FORWARD -i wlan0 ! -o wlan0 -m mac --mac-source ${mac} -j ACCEPT || true`);
   }
 
+  // 3. Setup Walled Garden: Allow ONLY HTTPS (port 443) traffic to specific resolved Captcha CDN IPs before authentication
+  try {
+    const captchaIps = await resolveWalledGardenIps();
+    for (const ip of captchaIps) {
+      if (ip && ip !== '0.0.0.0' && !ip.startsWith('127.')) {
+        await runSudo(`iptables -A FORWARD -i wlan0 -p tcp --dport 443 -d ${ip} -j ACCEPT || true`);
+      }
+    }
+  } catch (err) {}
+
   // 4. Redirection rule: Redirect unauthenticated HTTP (TCP 80) traffic to local router port 3000 (Captive Portal)
   await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true");
 
-  // 5. Drop all other forward traffic for unauthenticated clients on wlan0 heading to WAN (anything not wlan0)
+  // 5. Strictly DROP all other forward traffic for unauthenticated clients on wlan0 heading to WAN
   await runSudo("iptables -A FORWARD -i wlan0 ! -o wlan0 -j DROP || true");
 }
 
