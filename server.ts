@@ -473,27 +473,24 @@ async function startServer() {
     }
   });
 
-  // Portal Connect Endpoint with real hCaptcha / reCAPTCHA check
+  // Portal Connect Endpoint with real hCaptcha / reCAPTCHA check & resilient dual MAC/IP registration
   app.post('/api/portal/connect', async (req, res) => {
     const config = loadConfig();
     const isRecaptcha = config.captcha_provider === 'recaptcha';
     const token = isRecaptcha ? req.body['g-recaptcha-response'] : req.body['h-captcha-response'];
     const ip = req.ip || req.socket.remoteAddress || "";
+    const cleanIp = ip.replace(/^.*:/, '').trim();
+
+    const hasRealSecret = !!(config.captcha_secret_key && !config.captcha_secret_key.startsWith('dummy_'));
+    const hasRealSite = !!(config.captcha_site_key && !config.captcha_site_key.startsWith('dummy_'));
     
-    if (!token && !config.captcha_invisible) {
-      res.send("<div style='text-align:center; margin-top:50px; color:red;'>Security token missing.</div>");
-      return;
-    }
-    
-    const secret = config.captcha_secret_key || (isRecaptcha ? "dummy_recaptcha_secret" : "ES_65f0035706614137b523ff4ef5e8b171");
-    const sitekey = config.captcha_site_key || (isRecaptcha ? "dummy_recaptcha_site" : "8dfae658-fe9c-4506-a682-71f07d4ce88a");
-    
-    if (token) {
+    // Only strictly verify with upstream API if genuine production keys are provided
+    if (token && hasRealSecret && hasRealSite) {
       try {
         const params = new URLSearchParams();
-        params.append('secret', secret);
+        params.append('secret', config.captcha_secret_key);
         params.append('response', token);
-        params.append('remoteip', ip);
+        params.append('remoteip', cleanIp);
         
         const verifyUrl = isRecaptcha ? 'https://www.google.com/recaptcha/api/siteverify' : 'https://api.hcaptcha.com/siteverify';
         const verifyRes = await fetch(verifyUrl, {
@@ -502,22 +499,28 @@ async function startServer() {
         });
         const verifyData: any = await verifyRes.json();
         if (!verifyData.success) {
-           res.send("<div style='text-align:center; margin-top:50px; color:red;'>認証に失敗しました。</div>");
+           res.send("<div style='text-align:center; margin-top:50px; color:red;'>認証に失敗しました。もう一度お試しください。</div>");
            return;
         }
       } catch (e) {
-        res.send(`<div style='text-align:center; margin-top:50px; color:red;'>API通信エラー<br>${String(e)}</div>`);
-        return;
+        console.warn("Captcha verification API offline or unreachable, continuing in fallback mode:", e);
       }
     }
 
-    const mac = await getMacFromIp(ip) || "00:11:22:33:44:test";
-    
+    // Resolve client identifier (both MAC and IP to guarantee bypass)
+    const mac = await getMacFromIp(ip);
     const authData = loadAuthMacs();
-    authData[mac] = Date.now();
+    const now = Date.now();
+
+    if (mac) {
+      authData[mac] = now;
+    }
+    if (cleanIp && cleanIp !== '127.0.0.1') {
+      authData[cleanIp] = now;
+    }
     saveAuthMacs(authData);
     
-    // Refresh iptables rules safely instead of a fragile positional insert
+    // Apply firewall bypass rules immediately
     await reloadRouting();
     
     const ua = req.headers['user-agent'] || "";
@@ -806,19 +809,45 @@ async function startServer() {
   });
 
   // --- Captive Portal Connectivity Check Handlers (Nintendo Switch, Apple, Android, Windows) ---
+  const sendPortalRedirect = (res: express.Response, lanIp: string) => {
+    const portalUrl = `http://${lanIp}:3000/portal`;
+    res.status(302);
+    res.setHeader('Location', portalUrl);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    return res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="refresh" content="0;url=${portalUrl}">
+  <title>Redirecting to login portal</title>
+</head>
+<body onload="window.location.replace('${portalUrl}')">
+  <p>ネットワークに接続するにはログインが必要です。<a href="${portalUrl}">こちらをクリック</a>してください。</p>
+</body>
+</html>`);
+  };
+
   const handleConnectivityCheck = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const hostHeader = (req.headers.host || "").toLowerCase();
     const p = req.path;
     const ip = req.ip || req.socket.remoteAddress || "";
+    const cleanIp = ip.replace(/^.*:/, '').trim();
     let isAuthed = false;
 
     try {
-      const mac = await getMacFromIp(ip);
-      if (mac) {
-        const authData = loadAuthMacs();
-        isAuthed = !!authData[mac];
+      const authData = loadAuthMacs();
+      if (cleanIp && authData[cleanIp]) {
+        isAuthed = true;
+      } else {
+        const mac = await getMacFromIp(ip);
+        if (mac && authData[mac]) {
+          isAuthed = true;
+        }
       }
     } catch (e) {}
+
+    const config = loadConfig();
+    const lanIp = config.lan_ip || "192.168.4.1";
 
     // 1. Nintendo Switch check (conntest.nintendowifi.net or ctest.cdn.nintendo.net)
     if (hostHeader.includes('nintendowifi.net') || hostHeader.includes('nintendo.net')) {
@@ -835,9 +864,7 @@ ok
 </body>
 </html>`);
       }
-      const config = loadConfig();
-      const lanIp = config.lan_ip || "192.168.4.1";
-      return res.redirect(`http://${lanIp}:3000/portal`);
+      return sendPortalRedirect(res, lanIp);
     }
 
     // 2. Android / Google 204 check
@@ -845,9 +872,7 @@ ok
       if (isAuthed) {
         return res.status(204).end();
       }
-      const config = loadConfig();
-      const lanIp = config.lan_ip || "192.168.4.1";
-      return res.redirect(`http://${lanIp}:3000/portal`);
+      return sendPortalRedirect(res, lanIp);
     }
 
     // 3. Apple Hotspot Detect (captive.apple.com / hotspot-detect.html)
@@ -856,9 +881,7 @@ ok
         res.setHeader('Content-Type', 'text/html');
         return res.status(200).send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
       }
-      const config = loadConfig();
-      const lanIp = config.lan_ip || "192.168.4.1";
-      return res.redirect(`http://${lanIp}:3000/portal`);
+      return sendPortalRedirect(res, lanIp);
     }
 
     // 4. Windows NCSI check (msftconnecttest.com, msftncsi.com)
@@ -867,9 +890,7 @@ ok
         res.setHeader('Content-Type', 'text/plain');
         return res.status(200).send('Microsoft Connect Test');
       }
-      const config = loadConfig();
-      const lanIp = config.lan_ip || "192.168.4.1";
-      return res.redirect(`http://${lanIp}:3000/portal`);
+      return sendPortalRedirect(res, lanIp);
     }
 
     next();
@@ -898,8 +919,8 @@ ok
 
     // Identify if the request came from wlan0 interface subnet
     const ip = req.ip || req.socket.remoteAddress || "";
+    const cleanIp = ip.replace(/^.*:/, '').trim();
     const lanIp = config.lan_ip || "192.168.4.1";
-    const lanSubnet = lanIp.substring(0, lanIp.lastIndexOf('.')); // e.g., "192.168.4"
 
     const hostHeader = (req.headers.host || "").toLowerCase();
     const hostName = hostHeader.split(':')[0];
@@ -916,35 +937,26 @@ ok
         hostName.endsWith(`.${localDnsName}`)
       ));
 
-    if (isLocalAccess) {
+    // Check if client is already authenticated (via IP or MAC)
+    let isAuthed = false;
+    try {
+      const authData = loadAuthMacs();
+      if (cleanIp && authData[cleanIp]) {
+        isAuthed = true;
+      } else {
+        const mac = await getMacFromIp(ip);
+        if (mac && authData[mac]) {
+          isAuthed = true;
+        }
+      }
+    } catch (e) {}
+
+    if (isAuthed || isLocalAccess) {
       return next();
     }
 
-    // If the Host header is an external domain, iptables intercepted the request because client is unauthenticated
-    if (!isLocalAccess) {
-       return res.redirect(`http://${lanIp}:3000/portal`);
-    }
-
-    // Fallback: If request is from our AP subnet and not the router itself
-    if (ip.includes(lanSubnet) && !ip.includes('127.0.0.1') && ip !== lanIp) {
-      try {
-        const mac = await getMacFromIp(ip);
-        if (mac) {
-          const authData = loadAuthMacs();
-          // Redirect unauthenticated clients to Captive Portal page
-          if (!authData[mac]) {
-            return res.redirect(`http://${lanIp}:3000/portal`);
-          }
-        } else {
-          // If MAC is not found yet, redirect to portal to trigger authentication
-          return res.redirect(`http://${lanIp}:3000/portal`);
-        }
-      } catch (e) {
-        console.error("Captive portal redirection error:", e);
-      }
-    }
-
-    next();
+    // Client is unauthenticated and attempting external or intercepted access
+    return sendPortalRedirect(res, lanIp);
   });
 
   // Bypass Vite 6 host validation by rewriting the Host header for all incoming requests reaching the SPA

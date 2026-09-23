@@ -319,13 +319,77 @@ export async function getConnectedDevices() {
   return devices;
 }
 
-export async function getMacFromIp(ip: string) {
+export async function getMacFromIp(ip: string): Promise<string | null> {
   if (!ip || ip === "127.0.0.1" || ip === "::1") return null;
   // Clean IPv4-mapped IPv6 address (e.g. ::ffff:192.168.4.10 -> 192.168.4.10)
-  const cleanIp = ip.replace(/^.*:/, '');
-  const res = await runSudo(`ip neigh show ${cleanIp}`);
-  const match = res.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/);
-  return match ? match[0].toLowerCase() : null;
+  const cleanIp = ip.replace(/^.*:/, '').trim();
+  if (!cleanIp) return null;
+
+  // 1. Check kernel ARP cache (/proc/net/arp)
+  try {
+    const arpData = await runSudo("cat /proc/net/arp");
+    const lines = arpData.split('\n');
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts[0] === cleanIp && parts[3] && parts[3] !== "00:00:00:00:00:00") {
+        const mac = parts[3].toLowerCase();
+        if (/^([0-9a-f]{2}[:-]){5}([0-9a-f]{2})$/.test(mac)) {
+          return mac;
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 2. Check ip neigh show
+  try {
+    const res = await runSudo(`ip neigh show ${cleanIp}`);
+    const match = res.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/);
+    if (match) return match[0].toLowerCase();
+  } catch (e) {}
+
+  // 3. Check dnsmasq lease files
+  try {
+    const leaseFiles = [
+      '/var/lib/misc/dnsmasq.leases',
+      '/tmp/dnsmasq.leases',
+      '/var/lib/dnsmasq/dnsmasq.leases',
+      '/etc/dnsmasq.leases'
+    ];
+    for (const file of leaseFiles) {
+      const leaseOut = await runSudo(`test -f ${file} && cat ${file} || true`);
+      if (leaseOut) {
+        const lines = leaseOut.split('\n');
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/);
+          // format: <timestamp> <mac> <ip> <hostname> <client-id>
+          if (parts[2] === cleanIp && parts[1]) {
+            const mac = parts[1].toLowerCase();
+            if (/^([0-9a-f]{2}[:-]){5}([0-9a-f]{2})$/.test(mac)) {
+              return mac;
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 4. Quick ping to trigger ARP resolution then re-check /proc/net/arp
+  try {
+    await runSudo(`ping -c 1 -W 1 ${cleanIp} || true`);
+    const arpData = await runSudo("cat /proc/net/arp");
+    const lines = arpData.split('\n');
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts[0] === cleanIp && parts[3] && parts[3] !== "00:00:00:00:00:00") {
+        const mac = parts[3].toLowerCase();
+        if (/^([0-9a-f]{2}[:-]){5}([0-9a-f]{2})$/.test(mac)) {
+          return mac;
+        }
+      }
+    }
+  } catch (e) {}
+
+  return null;
 }
 
 export async function setupWifiAP() {
@@ -420,6 +484,16 @@ domain-needed
 bogus-priv
 server=${config.custom_dns1 || '8.8.8.8'}
 server=${config.custom_dns2 || '1.1.1.1'}
+
+# Instant captive portal detection mappings (ensures instant popup on all devices even if WAN DNS is slow)
+address=/conntest.nintendowifi.net/${ip}
+address=/ctest.cdn.nintendo.net/${ip}
+address=/captive.apple.com/${ip}
+address=/connectivitycheck.gstatic.com/${ip}
+address=/connectivitycheck.android.com/${ip}
+address=/clients3.google.com/${ip}
+address=/msftconnecttest.com/${ip}
+address=/msftncsi.com/${ip}
 `;
   await runSudo(`bash -c 'cat << "EOF" > /etc/dnsmasq.d/wlan0.conf\n${dnsmasqConf}EOF' || true`);
 
@@ -567,54 +641,68 @@ export async function applyFirewallRules() {
   const config = loadConfig();
   const lanIp = config.lan_ip || "192.168.4.1";
 
-  // Allow DHCP (UDP 67/68) and DNS (UDP/TCP 53) in iptables for wlan0
-  await runSudo("iptables -D INPUT -i wlan0 -p udp --dport 67:68 -j ACCEPT || true");
-  await runSudo("iptables -D INPUT -i wlan0 -p udp --dport 53 -j ACCEPT || true");
-  await runSudo("iptables -D INPUT -i wlan0 -p tcp --dport 53 -j ACCEPT || true");
+  // 1. Enable IP forwarding (Runtime & Persistent)
+  await runSudo("sysctl -w net.ipv4.ip_forward=1 || true");
+  await runSudo("bash -c 'echo \"net.ipv4.ip_forward=1\" > /etc/sysctl.d/99-ip-forward.conf && sysctl -p /etc/sysctl.d/99-ip-forward.conf' || true");
 
+  // 2. Allow Essential Services in INPUT chain for wlan0
+  // DHCP (UDP 67/68), DNS (UDP/TCP 53), WebUI/Portal (TCP 80, 3000), Established
   await runSudo("iptables -I INPUT -i wlan0 -p udp --dport 67:68 -j ACCEPT || true");
   await runSudo("iptables -I INPUT -i wlan0 -p udp --dport 53 -j ACCEPT || true");
   await runSudo("iptables -I INPUT -i wlan0 -p tcp --dport 53 -j ACCEPT || true");
-
-  // Enable IP forwarding
-  await runSudo("sysctl -w net.ipv4.ip_forward=1 || true");
+  await runSudo("iptables -I INPUT -i wlan0 -p tcp --dport 80 -j ACCEPT || true");
+  await runSudo("iptables -I INPUT -i wlan0 -p tcp --dport 3000 -j ACCEPT || true");
+  await runSudo("iptables -I INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || iptables -I INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT || true");
   
-  // Flush previous rules to prevent redundant chains or duplicate rules
+  // 3. Flush previous rules in FORWARD & NAT to prevent redundant or stale rules
   await runSudo("iptables -F FORWARD || true");
   await runSudo("iptables -t nat -F PREROUTING || true");
   await runSudo("iptables -t nat -F POSTROUTING || true");
 
-  // Masquerade all outbound WAN traffic not destined back to the local AP network (any interface other than wlan0)
+  // 4. Masquerade all outbound WAN traffic not destined back to the local AP network
   await runSudo("iptables -t nat -A POSTROUTING ! -o wlan0 -j MASQUERADE || true");
   
-  // Accept established WAN back to LAN
-  await runSudo("iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT || true");
+  // 5. Accept established WAN back to LAN (conntrack + state fallback)
+  await runSudo("iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT || true");
 
-  // 1. ALWAYS redirect port 80 requests destined to router LAN IP to port 3000 (whether client is authenticated or not)
+  // 6. Transparent DNS Redirection for unauthenticated clients:
+  // Intercept any external DNS queries (UDP/TCP 53) and send them to local dnsmasq to eliminate DNS timeouts & private DNS blockages
+  await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p udp --dport 53 -j REDIRECT --to-ports 53 || true");
+  await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 53 -j REDIRECT --to-ports 53 || true");
+
+  // 7. ALWAYS redirect port 80 requests destined to router LAN IP to port 3000 (whether client is authenticated or not)
   // This ensures custom domain (pifi.me) and router IP access on port 80 directly reaches Web UI
   await runSudo(`iptables -t nat -A PREROUTING -i wlan0 -d ${lanIp} -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true`);
 
-  // 2. Dynamic bypass rules: Accept ALL forward and NAT traffic for authenticated clients
+  // 8. Dynamic bypass rules: Accept ALL forward and NAT traffic for authenticated clients (MAC & IP)
   const authData = loadAuthMacs();
-  for (const mac of Object.keys(authData)) {
-    await runSudo(`iptables -t nat -A PREROUTING -m mac --mac-source ${mac} -j RETURN || true`);
-    await runSudo(`iptables -A FORWARD -i wlan0 ! -o wlan0 -m mac --mac-source ${mac} -j ACCEPT || true`);
+  for (const id of Object.keys(authData)) {
+    if (id.includes(':') && id.length >= 17) {
+      // MAC Address bypass
+      await runSudo(`iptables -t nat -A PREROUTING -m mac --mac-source ${id} -j RETURN || true`);
+      await runSudo(`iptables -A FORWARD -i wlan0 ! -o wlan0 -m mac --mac-source ${id} -j ACCEPT || true`);
+    } else if (/^\d+\.\d+\.\d+\.\d+$/.test(id)) {
+      // IP Address bypass fallback
+      await runSudo(`iptables -t nat -A PREROUTING -s ${id} -j RETURN || true`);
+      await runSudo(`iptables -A FORWARD -i wlan0 ! -o wlan0 -s ${id} -j ACCEPT || true`);
+    }
   }
 
-  // 3. Setup Walled Garden: Allow ONLY HTTPS (port 443) traffic to specific resolved Captcha CDN IPs before authentication
+  // 9. Setup Walled Garden: Allow HTTPS (port 443) traffic to specific resolved Captcha CDN IPs before authentication
   try {
     const captchaIps = await resolveWalledGardenIps();
     for (const ip of captchaIps) {
       if (ip && ip !== '0.0.0.0' && !ip.startsWith('127.')) {
         await runSudo(`iptables -A FORWARD -i wlan0 -p tcp --dport 443 -d ${ip} -j ACCEPT || true`);
+        await runSudo(`iptables -A FORWARD -i wlan0 -p tcp --dport 80 -d ${ip} -j ACCEPT || true`);
       }
     }
   } catch (err) {}
 
-  // 4. Redirection rule: Redirect unauthenticated HTTP (TCP 80) traffic to local router port 3000 (Captive Portal)
+  // 10. Redirection rule: Redirect unauthenticated HTTP (TCP 80) traffic to local router port 3000 (Captive Portal)
   await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true");
 
-  // 5. Strictly DROP all other forward traffic for unauthenticated clients on wlan0 heading to WAN
+  // 11. Strictly DROP all other forward traffic for unauthenticated clients on wlan0 heading to WAN
   await runSudo("iptables -A FORWARD -i wlan0 ! -o wlan0 -j DROP || true");
 }
 
