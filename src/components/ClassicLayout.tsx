@@ -6,7 +6,6 @@ import NetworkSettings from './NetworkSettings';
 import WifiSettings from './WifiSettings';
 import RoutingSettings from './RoutingSettings';
 import VPNSettings from './VPNSettings';
-import NASSettings from './NASSettings';
 import QoSSettings from './QoSSettings';
 import PortalEditor from './PortalEditor';
 import AdvancedSettings from './AdvancedSettings';
@@ -37,7 +36,6 @@ export default function ClassicLayout({ onLogout }: { onLogout: () => void }) {
       case 'wifi': return <WifiSettings />;
       case 'routing': return <RoutingSettings />;
       case 'vpn': return <VPNSettings />;
-      case 'nas': return <NASSettings />;
       case 'qos': return <QoSSettings />;
       case 'portal': return <PortalEditor />;
       case 'advanced': return <AdvancedSettings />;
@@ -79,10 +77,6 @@ export default function ClassicLayout({ onLogout }: { onLogout: () => void }) {
           <MenuCategory title="ルーティング・NAT" items={[
             { id: 'routing', label: '静的ルーティング・NAPT' },
             { id: 'qos', label: '帯域制御 (QoS)' },
-          ]} active={activeTab} onSelect={setActiveTab} />
-
-          <MenuCategory title="アプリケーション" items={[
-            { id: 'nas', label: '簡易NAS・USB共有' },
           ]} active={activeTab} onSelect={setActiveTab} />
 
           <MenuCategory title="高度な設定" items={[

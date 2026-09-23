@@ -53,10 +53,7 @@ export interface RouterConfig {
   vpn_type?: 'ipsec' | 'l2tp' | 'openvpn';
   vpn_psk?: string;
   
-  // Pi 4B Specific: NAS & QoS
-  nas_enabled?: boolean;
-  nas_share_name?: string;
-  nas_workgroup?: string;
+  // Pi 4B Specific: QoS
   qos_enabled?: boolean;
   qos_download?: string;
   qos_upload?: string;

@@ -185,9 +185,6 @@ export function loadConfig() {
     vpn_enabled: false,
     vpn_type: "l2tp",
     vpn_psk: "secret_psk_key",
-    nas_enabled: false,
-    nas_share_name: "PiShare",
-    nas_workgroup: "WORKGROUP",
     qos_enabled: false,
     qos_download: "100",
     qos_upload: "100",
@@ -417,12 +414,17 @@ bind-interfaces
 listen-address=${ip}
 dhcp-range=${dhcpStart},${dhcpEnd},255.255.255.0,${config.lease_time || '24h'}
 dhcp-option=option:router,${ip}
-dhcp-option=option:dns-server,${ip},8.8.8.8
+dhcp-option=option:dns-server,${ip}
 dhcp-authoritative
 domain-needed
 bogus-priv
+server=${config.custom_dns1 || '8.8.8.8'}
+server=${config.custom_dns2 || '1.1.1.1'}
 `;
   await runSudo(`bash -c 'cat << "EOF" > /etc/dnsmasq.d/wlan0.conf\n${dnsmasqConf}EOF' || true`);
+
+  // Ensure Local DNS resolution is set up
+  await applyLocalDns(config.local_dns_enabled, config.local_dns_name, ip);
 
   // 9. Start hostapd FIRST so interface is put into AP mode
   await runSudo("systemctl restart hostapd || true");
@@ -649,11 +651,31 @@ export async function manageStaticRoute(action: 'add' | 'del', dest: string, gw:
   return true;
 }
 
+export async function applyLocalDns(enabled?: boolean, name?: string, lanIp?: string) {
+  const config = loadConfig();
+  const ip = lanIp || config.lan_ip || "192.168.4.1";
+  const dnsEnabled = enabled !== undefined ? enabled : config.local_dns_enabled;
+  const dnsName = name || config.local_dns_name;
+
+  if (dnsEnabled && dnsName) {
+    const cleanName = dnsName.trim();
+    // 1. Write dnsmasq local address configuration
+    await runSudo(`bash -c 'mkdir -p /etc/dnsmasq.d && echo "address=/${cleanName}/${ip}" > /etc/dnsmasq.d/router_local.conf' || true`);
+    // 2. Add or update in /etc/hosts for bulletproof OS & internal resolution
+    await runSudo(`sed -i '/# --- RPI-ROUTER-LOCAL-DNS ---/,/# --- RPI-ROUTER-LOCAL-DNS-END ---/d' /etc/hosts || true`);
+    await runSudo(`bash -c 'echo -e "\\n# --- RPI-ROUTER-LOCAL-DNS ---\\n${ip} ${cleanName}\\n# --- RPI-ROUTER-LOCAL-DNS-END ---" >> /etc/hosts' || true`);
+  } else {
+    await runSudo(`rm -f /etc/dnsmasq.d/router_local.conf || true`);
+    await runSudo(`sed -i '/# --- RPI-ROUTER-LOCAL-DNS ---/,/# --- RPI-ROUTER-LOCAL-DNS-END ---/d' /etc/hosts || true`);
+  }
+}
+
 export async function applyLanConfig(ip: string, start: string, end: string, lease: string) {
-  // Mocking dnsmasq and interface reconfiguration
-  await runSudo(`ip addr add ${ip}/24 dev wlan0`);
-  await runSudo(`sed -i "s/^dhcp-range=.*/dhcp-range=${start},${end},255.255.255.0,${lease}/" /etc/dnsmasq.conf`);
-  await runSudo("systemctl restart dnsmasq");
+  const config = loadConfig();
+  await runSudo(`ip addr add ${ip}/24 dev wlan0 || true`);
+  await runSudo(`sed -i "s/^dhcp-range=.*/dhcp-range=${start},${end},255.255.255.0,${lease}/" /etc/dnsmasq.conf || true`);
+  await applyLocalDns(config.local_dns_enabled, config.local_dns_name, ip);
+  await runSudo("systemctl restart dnsmasq || true");
   return true;
 }
 

@@ -7,7 +7,7 @@ import { createServer as createViteServer } from 'vite';
 import { 
   getSysInfo, getConnectedDevices, loadConfig, saveConfig, 
   setWifiMode, setupWifiAP, blockMac, reloadRouting, runSudo, PORTAL_FILE, getMacFromIp,
-  loadAuthMacs, saveAuthMacs, addPortForward, applyQoS, runPing, getCmdLogs,
+  loadAuthMacs, saveAuthMacs, addPortForward, applyQoS, applyLocalDns, runPing, getCmdLogs,
   getNetworkMonitorStats, getDnsQueryLogs
 } from './server/network.ts';
 
@@ -212,19 +212,6 @@ async function startServer() {
     }
     res.json({ success: true });
   });
-  
-  app.post('/api/config/nas', requireAdmin, async (req, res) => {
-    const { nas_enabled, nas_share_name, nas_workgroup } = req.body;
-    const config = loadConfig();
-    Object.assign(config, { nas_enabled, nas_share_name, nas_workgroup });
-    saveConfig(config);
-    if (nas_enabled) {
-      await runSudo("systemctl restart smbd");
-    } else {
-      await runSudo("systemctl stop smbd");
-    }
-    res.json({ success: true });
-  });
 
   app.post('/api/config/qos', requireAdmin, async (req, res) => {
     const { qos_enabled, qos_download, qos_upload } = req.body;
@@ -259,7 +246,7 @@ async function startServer() {
           parameters: {
             type: Type.OBJECT,
             properties: {
-              key: { type: Type.STRING, description: "変更する設定キー(例: sta_ssid, wifi_band, nas_enabled)" },
+              key: { type: Type.STRING, description: "変更する設定キー(例: sta_ssid, wifi_band, ap_ssid)" },
               value: { type: Type.STRING, description: "設定する値" }
             },
             required: ["key", "value"]
@@ -337,12 +324,7 @@ async function startServer() {
     saveConfig(config);
     // Setup local DNS mapping
     try {
-      if (local_dns_enabled && local_dns_name) {
-        const lanIp = config.lan_ip || "192.168.4.1";
-        await runSudo(`bash -c 'echo "address=/${local_dns_name}/${lanIp}" > /etc/dnsmasq.d/router_local.conf'`);
-      } else {
-        await runSudo(`rm -f /etc/dnsmasq.d/router_local.conf`);
-      }
+      await applyLocalDns(local_dns_enabled, local_dns_name, config.lan_ip);
       await runSudo("systemctl restart dnsmasq || true");
       res.json({ success: true, message: 'DNS settings updated successfully.' });
     } catch (e: any) {
@@ -538,11 +520,31 @@ async function startServer() {
     // Refresh iptables rules safely instead of a fragile positional insert
     await reloadRouting();
     
+    const ua = req.headers['user-agent'] || "";
+    const isSwitch = /Nintendo Switch|NintendoBrowser/i.test(ua);
+    const isApple = /iPhone|iPad|iPod|Macintosh.*CaptiveNetworkSupport/i.test(ua);
+    const isWindows = /Windows NT/i.test(ua);
+
+    let redirectTarget = 'http://connectivitycheck.gstatic.com/generate_204';
+    let deviceName = '端末';
+    if (isSwitch) {
+      redirectTarget = 'http://conntest.nintendowifi.net/';
+      deviceName = 'Nintendo Switch';
+    } else if (isApple) {
+      redirectTarget = 'http://captive.apple.com/hotspot-detect.html';
+      deviceName = 'Appleデバイス';
+    } else if (isWindows) {
+      redirectTarget = 'http://www.msftconnecttest.com/connecttest.txt';
+      deviceName = 'Windows PC';
+    }
+    
     res.send(`
+    <!DOCTYPE html>
     <html lang="ja">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta http-equiv="refresh" content="2;url=${redirectTarget}">
       <title>接続完了 / Connected</title>
       <style>
         body {
@@ -551,18 +553,20 @@ async function startServer() {
           display: flex;
           align-items: center;
           justify-content: center;
-          height: 100vh;
+          min-height: 100vh;
           margin: 0;
           color: #2d3748;
+          padding: 1rem;
+          box-sizing: border-box;
         }
         .card {
           background: white;
-          padding: 2.5rem;
+          padding: 2.5rem 2rem;
           border-radius: 16px;
           box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
           text-align: center;
-          max-width: 420px;
-          width: 90%;
+          max-width: 440px;
+          width: 100%;
         }
         .checkmark-container {
           width: 72px;
@@ -594,21 +598,37 @@ async function startServer() {
           color: #4a5568;
           font-size: 0.95rem;
           line-height: 1.5;
-          margin: 0 0 1.5rem 0;
+          margin: 0 0 1.25rem 0;
         }
         .status {
-          font-size: 0.75rem;
+          font-size: 0.8rem;
           color: #718096;
           display: flex;
           flex-direction: column;
           gap: 0.25rem;
+          margin-bottom: 1.5rem;
+        }
+        .btn-complete {
+          display: inline-block;
+          background-color: #047857;
+          color: #ffffff !important;
+          padding: 0.75rem 1.5rem;
+          border-radius: 8px;
+          font-weight: 600;
+          font-size: 0.95rem;
+          text-decoration: none;
+          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+          transition: background-color 0.2s;
+        }
+        .btn-complete:hover {
+          background-color: #065f46;
         }
         .loader {
-          border: 2px stroke #e2e8f0;
-          border-top: 2px solid #3182ce;
+          border: 2px solid #e2e8f0;
+          border-top: 2px solid #047857;
           border-radius: 50%;
-          width: 16px;
-          height: 16px;
+          width: 18px;
+          height: 18px;
           animation: spin 1s linear infinite;
           margin: 0 auto 0.5rem;
         }
@@ -626,17 +646,23 @@ async function startServer() {
           </svg>
         </div>
         <h2>接続完了 / Connected</h2>
-        <p>インターネットのご利用が可能になりました。<br>自動的にネットワークに接続を確立しています...</p>
+        <p>インターネットのご利用が可能になりました。<br>${deviceName}の接続チェック画面へ自動で遷移します。</p>
         
         <div class="status">
           <div class="loader"></div>
-          <div>Wi-Fi接続チェックを同期中...</div>
+          <div>OS接続シグナル同期中...</div>
+        </div>
+
+        <div>
+          <a href="${redirectTarget}" class="btn-complete" id="complete-link">
+            接続確認・完了 (Finish)
+          </a>
         </div>
       </div>
 
       <script>
-        // Multiple OS probe URLs to clear the exclamation mark on all devices (Google, Apple, Microsoft)
         const probes = [
+          'http://conntest.nintendowifi.net/',
           'http://connectivitycheck.gstatic.com/generate_204',
           'http://connectivitycheck.android.com/generate_204',
           'http://clients3.google.com/generate_204',
@@ -646,21 +672,17 @@ async function startServer() {
           'http://www.msftncsi.com/ncsi.txt'
         ];
 
-        // Perform parallel fetching/pinging of all connectivity endpoints to verify state
         probes.forEach(url => {
           fetch(url, { mode: 'no-cors', cache: 'no-store' })
-            .then(() => console.log('Probed: ' + url))
             .catch(() => {
-              // fallback with image request
               const img = new Image();
-              img.src = url + '?t=' + Date.now();
+              img.src = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
             });
         });
 
-        // Automatically close portal or redirect after 2 seconds
         setTimeout(() => {
-          window.location.href = 'http://connectivitycheck.gstatic.com/generate_204';
-        }, 2000);
+          window.location.href = '${redirectTarget}';
+        }, 1800);
       </script>
     </body>
     </html>
@@ -745,6 +767,78 @@ async function startServer() {
     }
   });
 
+  // --- Captive Portal Connectivity Check Handlers (Nintendo Switch, Apple, Android, Windows) ---
+  const handleConnectivityCheck = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const hostHeader = (req.headers.host || "").toLowerCase();
+    const p = req.path;
+    const ip = req.ip || req.socket.remoteAddress || "";
+    let isAuthed = false;
+
+    try {
+      const mac = await getMacFromIp(ip);
+      if (mac) {
+        const authData = loadAuthMacs();
+        isAuthed = !!authData[mac];
+      }
+    } catch (e) {}
+
+    // 1. Nintendo Switch check (conntest.nintendowifi.net or ctest.cdn.nintendo.net)
+    if (hostHeader.includes('nintendowifi.net') || hostHeader.includes('nintendo.net')) {
+      if (isAuthed) {
+        res.setHeader('X-Organization', 'Nintendo');
+        res.setHeader('Content-Type', 'text/html');
+        return res.status(200).send(`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+<head>
+<title>HTML Page</title>
+</head>
+<body bgcolor="#FFFFFF">
+ok
+</body>
+</html>`);
+      }
+      const config = loadConfig();
+      const lanIp = config.lan_ip || "192.168.4.1";
+      return res.redirect(`http://${lanIp}:3000/portal`);
+    }
+
+    // 2. Android / Google 204 check
+    if (p.includes('/generate_204') || hostHeader.includes('connectivitycheck.gstatic.com') || hostHeader.includes('connectivitycheck.android.com') || hostHeader.includes('clients3.google.com')) {
+      if (isAuthed) {
+        return res.status(204).end();
+      }
+      const config = loadConfig();
+      const lanIp = config.lan_ip || "192.168.4.1";
+      return res.redirect(`http://${lanIp}:3000/portal`);
+    }
+
+    // 3. Apple Hotspot Detect (captive.apple.com / hotspot-detect.html)
+    if (p.includes('/hotspot-detect.html') || hostHeader.includes('captive.apple.com') || hostHeader.includes('thinkdifferent.us') || hostHeader.includes('ibook.info')) {
+      if (isAuthed) {
+        res.setHeader('Content-Type', 'text/html');
+        return res.status(200).send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
+      }
+      const config = loadConfig();
+      const lanIp = config.lan_ip || "192.168.4.1";
+      return res.redirect(`http://${lanIp}:3000/portal`);
+    }
+
+    // 4. Windows NCSI check (msftconnecttest.com, msftncsi.com)
+    if (p.includes('/connecttest.txt') || p.includes('/ncsi.txt') || hostHeader.includes('msftconnecttest.com') || hostHeader.includes('msftncsi.com')) {
+      if (isAuthed) {
+        res.setHeader('Content-Type', 'text/plain');
+        return res.status(200).send('Microsoft Connect Test');
+      }
+      const config = loadConfig();
+      const lanIp = config.lan_ip || "192.168.4.1";
+      return res.redirect(`http://${lanIp}:3000/portal`);
+    }
+
+    next();
+  };
+
+  app.use(handleConnectivityCheck);
+
   // --- Captive Portal Redirection Middleware ---
   app.use(async (req, res, next) => {
     const p = req.path;
@@ -754,7 +848,7 @@ async function startServer() {
       p.startsWith('/api/portal') || 
       p.startsWith('/api/config') ||
       p.startsWith('/api/auth') || // Allow login checks
-      /\.(js|css|png|jpg|jpeg|gif|ico|svg|json|woff2?|ttf|map)$/i.test(p) // Skip static assets but NOT captive portal HTML/TXT checks
+      /\.(js|css|png|jpg|jpeg|gif|ico|svg|json|woff2?|ttf|map)$/i.test(p) // Skip static assets
     ) {
       return next();
     }
@@ -769,16 +863,20 @@ async function startServer() {
     const lanIp = config.lan_ip || "192.168.4.1";
     const lanSubnet = lanIp.substring(0, lanIp.lastIndexOf('.')); // e.g., "192.168.4"
 
-    const hostHeader = req.headers.host || "";
-    // If the user is explicitly accessing the router's IP, let them access the dashboard directly
-    if (hostHeader.startsWith(lanIp) || hostHeader.startsWith('localhost')) {
+    const hostHeader = (req.headers.host || "").toLowerCase();
+    const localDnsName = (config.local_dns_enabled && config.local_dns_name) ? config.local_dns_name.toLowerCase().trim() : "";
+
+    // If the user is explicitly accessing the router's IP, localhost, or configured local DNS name, let them access dashboard
+    if (
+      hostHeader.startsWith(lanIp) || 
+      hostHeader.startsWith('localhost') || 
+      (localDnsName && hostHeader.startsWith(localDnsName))
+    ) {
       return next();
     }
 
-    // If the Host header is an external domain (e.g. connectivitycheck.gstatic.com),
-    // it means iptables intercepted the request because the client is unauthenticated.
-    // We must redirect them to the portal, regardless of how req.ip is reported by the OS/Proxy.
-    if (hostHeader && !hostHeader.startsWith(lanIp) && !hostHeader.startsWith('localhost')) {
+    // If the Host header is an external domain, iptables intercepted the request because client is unauthenticated
+    if (hostHeader && !hostHeader.startsWith(lanIp) && !hostHeader.startsWith('localhost') && (!localDnsName || !hostHeader.startsWith(localDnsName))) {
        return res.redirect(`http://${lanIp}:3000/portal`);
     }
 
