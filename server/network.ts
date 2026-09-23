@@ -606,6 +606,8 @@ export async function resolveWalledGardenIps(): Promise<string[]> {
     'assets.hcaptcha.com',
     'recaptcha.net',
     'www.recaptcha.net',
+    'www.google.com',
+    'google.com',
     'www.gstatic.com',
     'fonts.gstatic.com',
     'fonts.googleapis.com',
