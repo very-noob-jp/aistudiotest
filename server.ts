@@ -6,8 +6,9 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { 
   getSysInfo, getConnectedDevices, loadConfig, saveConfig, 
-  setWifiMode, setupWifiAP, blockMac, reloadRouting, runSudo, PORTAL_FILE, getMacFromIp,
-  loadAuthMacs, saveAuthMacs, addPortForward, applyQoS, applyLocalDns, runPing, getCmdLogs,
+  setWifiMode, setupWifiAP, blockMac, unblockMac, reloadRouting, runSudo, PORTAL_FILE, getMacFromIp,
+  loadAuthMacs, saveAuthMacs, addPortForward, applyQoS, applyLocalDns, applyDhcpAndDnsExtras,
+  runPing, runTraceroute, runDnsLookup, getKernelNetworkTables, getCmdLogs,
   getNetworkMonitorStats, getDnsQueryLogs
 } from './server/network.ts';
 
@@ -44,6 +45,31 @@ async function startServer() {
   app.post('/api/auth/logout', (req, res) => {
     res.clearCookie('admin_token');
     res.json({ success: true });
+  });
+
+  app.get('/api/auth/status', async (req, res) => {
+    const config = loadConfig();
+    const isAdminAuthed = req.cookies?.admin_token === config.admin_password;
+    const ip = req.ip || req.socket.remoteAddress || "";
+    const cleanIp = ip.replace(/^.*:/, '').trim();
+    const mac = await getMacFromIp(ip);
+    const authData = loadAuthMacs();
+    const portalAuthed = Boolean(
+      config.portal_enabled === false ||
+      (cleanIp && authData[cleanIp]) ||
+      (mac && authData[mac])
+    );
+    res.json({
+      authenticated: isAdminAuthed,
+      client_ip: cleanIp || '192.168.4.x',
+      client_mac: mac || null,
+      portal_authed: portalAuthed,
+      portal_enabled: config.portal_enabled !== false,
+      captcha_provider: config.captcha_provider || 'none',
+      ssid: config.ap_ssid || 'Free_WiFi_Pi',
+      local_dns_name: config.local_dns_name || 'pifi.me',
+      lan_ip: config.lan_ip || '192.168.4.1'
+    });
   });
 
   app.get('/api/sysinfo', requireAdmin, async (req, res) => {
@@ -154,13 +180,50 @@ async function startServer() {
   });
 
   app.post('/api/routing/portfwd', requireAdmin, async (req, res) => {
-    const { src_port, dest_ip, dest_port } = req.body;
-    const success = await addPortForward(src_port, dest_ip, dest_port);
-    if (success) {
-      res.json({ success: true });
-    } else {
-      res.status(400).json({ error: 'Failed to add port forwarding' });
+    const { action, rule, src_port, dest_ip, dest_port, protocol, name } = req.body;
+    const config = loadConfig();
+    if (action === 'del' && rule?.id) {
+      config.port_forwards = (config.port_forwards || []).filter((r: any) => r.id !== rule.id);
+      saveConfig(config);
+      await reloadRouting();
+      return res.json({ success: true, port_forwards: config.port_forwards });
     }
+    if (action === 'toggle' && rule?.id) {
+      config.port_forwards = (config.port_forwards || []).map((r: any) =>
+        r.id === rule.id ? { ...r, enabled: !r.enabled } : r
+      );
+      saveConfig(config);
+      await reloadRouting();
+      return res.json({ success: true, port_forwards: config.port_forwards });
+    }
+    const newRule = {
+      id: Date.now().toString(),
+      name: name || `Port ${src_port}`,
+      protocol: protocol || 'tcp',
+      src_port: String(src_port),
+      dest_ip: String(dest_ip),
+      dest_port: String(dest_port),
+      enabled: true
+    };
+    config.port_forwards = [...(config.port_forwards || []), newRule];
+    saveConfig(config);
+    await addPortForward(src_port, dest_ip, dest_port);
+    await reloadRouting();
+    res.json({ success: true, port_forwards: config.port_forwards });
+  });
+
+  app.post('/api/routing/nat-options', requireAdmin, async (req, res) => {
+    const { dmz_enabled, dmz_ip, mss_clamping, upnp_enabled } = req.body;
+    const config = loadConfig();
+    Object.assign(config, { dmz_enabled, dmz_ip, mss_clamping, upnp_enabled });
+    saveConfig(config);
+    if (upnp_enabled) {
+      await runSudo("systemctl start miniupnpd || true");
+    } else {
+      await runSudo("systemctl stop miniupnpd || true");
+    }
+    await reloadRouting();
+    res.json({ success: true });
   });
 
   app.post('/api/routing/static', requireAdmin, async (req, res) => {
@@ -181,14 +244,20 @@ async function startServer() {
   });
 
   app.post('/api/config/lan', requireAdmin, async (req, res) => {
-    const { lan_ip, subnet_mask, dhcp_enabled, dhcp_start, dhcp_end, lease_time } = req.body;
+    const { lan_ip, subnet_mask, dhcp_enabled, dhcp_start, dhcp_end, lease_time, custom_dns1, custom_dns2, dhcp_static_leases, custom_dns_records } = req.body;
     const config = loadConfig();
-    Object.assign(config, { lan_ip, subnet_mask, dhcp_enabled, dhcp_start, dhcp_end, lease_time });
+    Object.assign(config, {
+      lan_ip, subnet_mask, dhcp_enabled, dhcp_start, dhcp_end, lease_time,
+      ...(custom_dns1 !== undefined ? { custom_dns1 } : {}),
+      ...(custom_dns2 !== undefined ? { custom_dns2 } : {}),
+      ...(dhcp_static_leases !== undefined ? { dhcp_static_leases } : {}),
+      ...(custom_dns_records !== undefined ? { custom_dns_records } : {})
+    });
     saveConfig(config);
     
     try {
+      await applyDhcpAndDnsExtras();
       if (config.wifi_mode === 'AP') {
-        // Full rebuild of AP settings to prevent outdated IP configuration/conflicts
         await setupWifiAP();
       } else {
         await runSudo("ip addr flush dev wlan0 || true");
@@ -198,6 +267,75 @@ async function startServer() {
     } catch (e: any) {
       res.status(500).json({ error: e.message || 'LAN設定の適用に失敗しました。' });
     }
+  });
+
+  app.post('/api/config/dhcp-static', requireAdmin, async (req, res) => {
+    const { action, lease } = req.body;
+    const config = loadConfig();
+    if (action === 'add' && lease?.mac && lease?.ip) {
+      const cleanMac = lease.mac.toLowerCase().trim();
+      const filtered = (config.dhcp_static_leases || []).filter((l: any) => l.mac.toLowerCase() !== cleanMac);
+      config.dhcp_static_leases = [...filtered, {
+        id: lease.id || Date.now().toString(),
+        mac: cleanMac,
+        ip: lease.ip.trim(),
+        hostname: (lease.hostname || '').trim()
+      }];
+    } else if (action === 'del' && lease?.id) {
+      config.dhcp_static_leases = (config.dhcp_static_leases || []).filter((l: any) => l.id !== lease.id);
+    }
+    saveConfig(config);
+    await applyDhcpAndDnsExtras();
+    await runSudo("systemctl restart dnsmasq || true");
+    res.json({ success: true, dhcp_static_leases: config.dhcp_static_leases });
+  });
+
+  app.post('/api/config/dns-records', requireAdmin, async (req, res) => {
+    const { action, record } = req.body;
+    const config = loadConfig();
+    if (action === 'add' && record?.domain && record?.ip) {
+      config.custom_dns_records = [...(config.custom_dns_records || []), {
+        id: Date.now().toString(),
+        domain: record.domain.trim(),
+        ip: record.ip.trim()
+      }];
+    } else if (action === 'del' && record?.id) {
+      config.custom_dns_records = (config.custom_dns_records || []).filter((r: any) => r.id !== record.id);
+    }
+    saveConfig(config);
+    await applyDhcpAndDnsExtras();
+    await runSudo("systemctl restart dnsmasq || true");
+    res.json({ success: true, custom_dns_records: config.custom_dns_records });
+  });
+
+  app.post('/api/config/firewall', requireAdmin, async (req, res) => {
+    const { strict_ip_binding, adblock_enabled, dos_protection, block_wan_ping, tcp_bbr_enabled, action, rule } = req.body;
+    const config = loadConfig();
+    if (strict_ip_binding !== undefined) config.strict_ip_binding = strict_ip_binding;
+    if (adblock_enabled !== undefined) config.adblock_enabled = adblock_enabled;
+    if (dos_protection !== undefined) config.dos_protection = dos_protection;
+    if (block_wan_ping !== undefined) config.block_wan_ping = block_wan_ping;
+    if (tcp_bbr_enabled !== undefined) config.tcp_bbr_enabled = tcp_bbr_enabled;
+
+    if (action === 'add_rule' && rule) {
+      config.firewall_rules = [...(config.firewall_rules || []), {
+        id: Date.now().toString(),
+        name: rule.name || 'Custom Rule',
+        direction: rule.direction || 'FORWARD',
+        protocol: rule.protocol || 'tcp',
+        src_ip: rule.src_ip || '',
+        dst_port: rule.dst_port || '',
+        action: rule.action || 'DROP'
+      }];
+    } else if (action === 'del_rule' && rule?.id) {
+      config.firewall_rules = (config.firewall_rules || []).filter((r: any) => r.id !== rule.id);
+    }
+
+    saveConfig(config);
+    await applyDhcpAndDnsExtras();
+    await reloadRouting();
+    await runSudo("systemctl restart dnsmasq || true");
+    res.json({ success: true, firewall_rules: config.firewall_rules });
   });
 
   app.post('/api/config/vpn', requireAdmin, async (req, res) => {
@@ -383,6 +521,41 @@ async function startServer() {
     }
   });
 
+  app.post('/api/devices/unblock', requireAdmin, async (req, res) => {
+    const { mac } = req.body;
+    if (mac) {
+      await unblockMac(mac);
+      res.json({ success: true, message: `Unblocked ${mac}` });
+    } else {
+      res.status(400).json({ error: 'MAC required' });
+    }
+  });
+
+  app.post('/api/devices/auth', requireAdmin, async (req, res) => {
+    const { mac, ip, authorize } = req.body;
+    const authData = loadAuthMacs();
+    const now = Date.now();
+    if (authorize) {
+      if (mac) authData[mac.toLowerCase()] = now;
+      if (ip) authData[ip] = now;
+    } else {
+      if (mac) delete authData[mac.toLowerCase()];
+      if (ip) delete authData[ip];
+    }
+    saveAuthMacs(authData);
+    await reloadRouting();
+    res.json({ success: true });
+  });
+
+  app.post('/api/devices/alias', requireAdmin, (req, res) => {
+    const { mac, alias } = req.body;
+    if (!mac) return res.status(400).json({ error: 'MAC required' });
+    const config = loadConfig();
+    config.device_aliases = { ...(config.device_aliases || {}), [mac.toLowerCase()]: alias || '' };
+    saveConfig(config);
+    res.json({ success: true });
+  });
+
   app.post('/api/system/reboot', requireAdmin, async (req, res) => {
     res.json({ success: true, message: 'Rebooting...' });
     setTimeout(() => runSudo("reboot"), 1000);
@@ -401,6 +574,50 @@ async function startServer() {
     if (!host) return res.status(400).json({error: 'Host required'});
     const output = await runPing(host);
     res.json({ output });
+  });
+
+  app.post('/api/diag/traceroute', requireAdmin, async (req, res) => {
+    const { host } = req.body;
+    if (!host) return res.status(400).json({ error: 'Host required' });
+    const output = await runTraceroute(host);
+    res.json({ output });
+  });
+
+  app.post('/api/diag/nslookup', requireAdmin, async (req, res) => {
+    const { host } = req.body;
+    if (!host) return res.status(400).json({ error: 'Host required' });
+    const output = await runDnsLookup(host);
+    res.json({ output });
+  });
+
+  app.get('/api/diag/tables', requireAdmin, async (req, res) => {
+    const tables = await getKernelNetworkTables();
+    res.json(tables);
+  });
+
+  app.post('/api/system/password', requireAdmin, (req, res) => {
+    const { new_password } = req.body;
+    if (!new_password || String(new_password).trim().length < 3) {
+      return res.status(400).json({ error: 'パスワードは3文字以上で指定してください。' });
+    }
+    const config = loadConfig();
+    config.admin_password = String(new_password).trim();
+    saveConfig(config);
+    res.cookie('admin_token', config.admin_password, { httpOnly: true, maxAge: 86400000 });
+    res.json({ success: true });
+  });
+
+  app.post('/api/system/restore', requireAdmin, async (req, res) => {
+    const { config: importedConfig } = req.body;
+    if (!importedConfig || typeof importedConfig !== 'object') {
+      return res.status(400).json({ error: '不正な設定ファイルです。' });
+    }
+    const current = loadConfig();
+    const merged = { ...current, ...importedConfig };
+    saveConfig(merged);
+    await applyDhcpAndDnsExtras();
+    await reloadRouting();
+    res.json({ success: true });
   });
 
   app.get('/api/system/logs', requireAdmin, async (req, res) => {
@@ -473,43 +690,58 @@ async function startServer() {
     }
   });
 
-  // Portal Connect Endpoint with real hCaptcha / reCAPTCHA check & resilient dual MAC/IP registration
+  // Portal Connect Endpoint with support for No-CAPTCHA (default), Passcode, or optional reCAPTCHA/hCaptcha
   app.post('/api/portal/connect', async (req, res) => {
     const config = loadConfig();
-    const isRecaptcha = config.captcha_provider !== 'hcaptcha';
-    const token = req.body['g-recaptcha-response'] || req.body['h-captcha-response'] || req.body['token'];
+    const provider = config.captcha_provider || 'none';
     const ip = req.ip || req.socket.remoteAddress || "";
     const cleanIp = ip.replace(/^.*:/, '').trim();
+    const wantsJson = req.body?.json === true || (req.headers.accept || '').includes('application/json');
 
-    const testSecret = isRecaptcha ? "6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe" : "0x0000000000000000000000000000000000000000";
-    const secret = (config.captcha_secret_key && !config.captcha_secret_key.startsWith('dummy_')) 
-      ? config.captcha_secret_key 
-      : testSecret;
-
-    // Verify token with upstream provider
-    if (token && token !== 'test_token_bypass') {
-      try {
-        const params = new URLSearchParams();
-        params.append('secret', secret);
-        params.append('response', token);
-        params.append('remoteip', cleanIp);
-        
-        const verifyUrl = isRecaptcha ? 'https://www.google.com/recaptcha/api/siteverify' : 'https://api.hcaptcha.com/siteverify';
-        const verifyRes = await fetch(verifyUrl, {
-          method: 'POST',
-          body: params
-        });
-        const verifyData: any = await verifyRes.json();
-        if (!verifyData.success) {
-           console.warn("Captcha verification rejected by API:", verifyData);
-           // If using custom keys that failed, notify; otherwise continue
-           if (config.captcha_secret_key) {
-             res.send("<div style='text-align:center; margin-top:50px; color:red; font-family:sans-serif;'><h3>セキュリティ認証に失敗しました。</h3><p>もう一度お試しください。</p><p><a href='/portal'>戻る</a></p></div>");
-             return;
-           }
+    // 1. Passcode check if provider === 'passcode'
+    if (provider === 'passcode') {
+      const submittedPasscode = (req.body?.passcode || '').trim();
+      const expectedPasscode = (config.portal_passcode || '1234').trim();
+      if (submittedPasscode !== expectedPasscode) {
+        if (wantsJson) {
+          return res.status(401).json({ success: false, message: 'ゲストパスコードが一致しません。' });
         }
-      } catch (e) {
-        console.warn("Captcha verification API offline or unreachable, continuing in fallback mode:", e);
+        return res.send("<div style='text-align:center; margin-top:50px; color:#b91c1c; font-family:sans-serif;'><h3>パスコードが正しくありません。</h3><p>正しいゲストパスコードを入力してください。</p><p><a href='/portal' style='color:#005b9f;'>ポータル画面へ戻る</a></p></div>");
+      }
+    }
+
+    // 2. External Captcha check ONLY if provider is 'recaptcha' or 'hcaptcha'
+    if (provider === 'recaptcha' || provider === 'hcaptcha') {
+      const isRecaptcha = provider === 'recaptcha';
+      const token = req.body['g-recaptcha-response'] || req.body['h-captcha-response'] || req.body['token'];
+      const testSecret = isRecaptcha ? "6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe" : "0x0000000000000000000000000000000000000000";
+      const secret = (config.captcha_secret_key && !config.captcha_secret_key.startsWith('dummy_')) 
+        ? config.captcha_secret_key 
+        : testSecret;
+
+      if (token && token !== 'test_token_bypass') {
+        try {
+          const params = new URLSearchParams();
+          params.append('secret', secret);
+          params.append('response', token);
+          params.append('remoteip', cleanIp);
+          
+          const verifyUrl = isRecaptcha ? 'https://www.google.com/recaptcha/api/siteverify' : 'https://api.hcaptcha.com/siteverify';
+          const verifyRes = await fetch(verifyUrl, {
+            method: 'POST',
+            body: params
+          });
+          const verifyData: any = await verifyRes.json();
+          if (!verifyData.success && config.captcha_secret_key) {
+            if (wantsJson) {
+              return res.status(401).json({ success: false, message: 'CAPTCHA認証に失敗しました。' });
+            }
+            res.send("<div style='text-align:center; margin-top:50px; color:red; font-family:sans-serif;'><h3>セキュリティ認証に失敗しました。</h3><p>もう一度お試しください。</p><p><a href='/portal'>戻る</a></p></div>");
+            return;
+          }
+        } catch (e) {
+          console.warn("Captcha verification API offline or unreachable, continuing in fallback mode:", e);
+        }
       }
     }
 
@@ -528,6 +760,10 @@ async function startServer() {
     
     // Apply firewall bypass rules immediately
     await reloadRouting();
+
+    if (wantsJson) {
+      return res.json({ success: true, mac, ip: cleanIp });
+    }
     
     const ua = req.headers['user-agent'] || "";
     const isSwitch = /Nintendo Switch|NintendoBrowser/i.test(ua);
@@ -698,129 +934,53 @@ async function startServer() {
     `);
   });
 
-  // Serve portal directly
+  // Serve portal directly (No reCAPTCHA by default; supports 'none', 'passcode', or optional 'recaptcha'/'hcaptcha')
   app.get('/portal', (req, res) => {
     try {
       let html = fs.readFileSync(PORTAL_FILE, 'utf-8');
       const config = loadConfig();
-      const isRe = config.captcha_provider !== 'hcaptcha';
-      const defaultSiteKey = isRe ? "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI" : "10000000-ffff-ffff-ffff-000000000001";
-      const sitekey = (config.captcha_site_key && !config.captcha_site_key.startsWith('dummy_')) ? config.captcha_site_key : defaultSiteKey;
-      // Use official global mirror recaptcha.net for bulletproof loading on game consoles (Switch/Switch 2) & restricted nets
-      const scriptUrl = isRe 
-        ? `https://www.recaptcha.net/recaptcha/api.js?onload=onCaptchaScriptLoaded&render=explicit` 
-        : `https://js.hcaptcha.com/1/api.js?onload=onCaptchaScriptLoaded&render=explicit`;
-      
-      if (config.captcha_invisible) {
-        // Inject invisible captcha handling if enabled
-        const actionPrefix = isRe ? `data-action="connect"` : ``;
-        const divClass = isRe ? `g-recaptcha` : `h-captcha`;
-        
-        // Remove the original captcha widget
-        html = html.replace(
-          '<div class="h-captcha" data-sitekey="8dfae658-fe9c-4506-a682-71f07d4ce88a" data-callback="onHcaptchaSuccess"></div>',
-          ''
-        );
-        html = html.replace('<script src="https://js.hcaptcha.com/1/api.js" async defer></script>', '');
-        
-        const autoForm = `
-        <form id="auto-captcha-form" action="/api/portal/connect" method="POST" style="display:none;">
-          <div class="${divClass}" data-sitekey="${sitekey}" data-callback="onSubmit" data-size="invisible" ${actionPrefix}></div>
-        </form>
+      const provider = config.captcha_provider || 'none';
+      const ssid = config.ap_ssid || 'Free_WiFi_Pi';
+
+      html = html.replace(/Free_WiFi_Pi/g, ssid);
+
+      if (provider === 'passcode') {
+        const passcodeScript = `
+        <script>
+          window.addEventListener('DOMContentLoaded', function() {
+            var sec = document.getElementById('passcode-section');
+            var inp = document.getElementById('passcode-input');
+            if (sec) sec.style.display = 'block';
+            if (inp) inp.required = true;
+          });
+        </script>
+        `;
+        html = html.replace('</body>', `${passcodeScript}</body>`);
+      } else if (provider === 'recaptcha' || provider === 'hcaptcha') {
+        const isRe = provider === 'recaptcha';
+        const defaultSiteKey = isRe ? "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI" : "10000000-ffff-ffff-ffff-000000000001";
+        const sitekey = (config.captcha_site_key && !config.captcha_site_key.startsWith('dummy_')) ? config.captcha_site_key : defaultSiteKey;
+        const scriptUrl = isRe 
+          ? `https://www.recaptcha.net/recaptcha/api.js` 
+          : `https://js.hcaptcha.com/1/api.js`;
+        const widgetClass = isRe ? 'g-recaptcha' : 'h-captcha';
+        const captchaInject = `
         <script src="${scriptUrl}" async defer></script>
         <script>
-          function onSubmit(token) {
-            document.getElementById("auto-captcha-form").submit();
-          }
-          window.onload = function() {
-             var btns = document.querySelectorAll("button");
-             if(btns.length > 0) {
-               btns[0].onclick = function(e) {
-                 e.preventDefault();
-                 ${isRe ? `grecaptcha.execute();` : `hcaptcha.execute();`}
-               };
-             } else {
-               ${isRe ? `grecaptcha.execute();` : `hcaptcha.execute();`}
-             }
-          }
-        </script>
-        `;
-        html = html.replace('</body>', `${autoForm}</body>`);
-      } else {
-        // Dynamic substitution for standard visible captcha with explicit render & fallback
-        // 1. Replace original script tag with the chosen provider's explicit loader
-        html = html.replace(
-          /<script src="https:\/\/(www\.recaptcha\.net|js\.hcaptcha\.com)[^"]*"[^>]*><\/script>/i,
-          `<script src="${scriptUrl}" async defer></script>`
-        );
-        
-        // 2. Set up JavaScript bridge for explicit rendering and fast loading
-        const bridgeJs = `
-        <script>
-          var captchaWidgetId = null;
-          function hideCaptchaLoading() {
-            var loader = document.getElementById('captcha-loading-indicator');
-            if (loader) loader.style.display = 'none';
-          }
-          function renderCaptchaWidget() {
-            var target = document.getElementById('captcha-render-target');
-            if (!target) return;
-            if (captchaWidgetId !== null) return;
-            try {
-              if (${isRe}) {
-                if (typeof grecaptcha !== 'undefined' && grecaptcha.render) {
-                  target.innerHTML = '';
-                  captchaWidgetId = grecaptcha.render(target, {
-                    sitekey: '${sitekey}',
-                    callback: function(token) {
-                      if (typeof onCaptchaSuccess === 'function') onCaptchaSuccess(token);
-                    }
-                  });
-                  hideCaptchaLoading();
-                }
-              } else {
-                if (typeof hcaptcha !== 'undefined' && hcaptcha.render) {
-                  target.innerHTML = '';
-                  captchaWidgetId = hcaptcha.render(target, {
-                    sitekey: '${sitekey}',
-                    callback: function(token) {
-                      if (typeof onCaptchaSuccess === 'function') onCaptchaSuccess(token);
-                    }
-                  });
-                  hideCaptchaLoading();
-                }
-              }
-            } catch(e) {
-              console.error("Captcha render error:", e);
+          window.addEventListener('DOMContentLoaded', function() {
+            var btn = document.getElementById('connect-btn');
+            if (btn) {
+              var container = document.createElement('div');
+              container.style.cssText = 'display:flex;justify-content:center;margin-bottom:16px;';
+              container.innerHTML = '<div class="${widgetClass}" data-sitekey="${sitekey}"></div>';
+              btn.parentNode.insertBefore(container, btn);
             }
-          }
-          window.onCaptchaScriptLoaded = function() {
-            renderCaptchaWidget();
-          };
-          window.onRecaptchaLoaded = function() {
-            renderCaptchaWidget();
-          };
-          window.onHcaptchaLoaded = function() {
-            renderCaptchaWidget();
-          };
-          // Multi-stage trigger to guarantee rendering across various browser speeds
-          if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function() { setTimeout(renderCaptchaWidget, 200); });
-          } else {
-            setTimeout(renderCaptchaWidget, 200);
-          }
-          setTimeout(renderCaptchaWidget, 1000);
-          setTimeout(renderCaptchaWidget, 2500);
+          });
         </script>
         `;
-        html = html.replace('</head>', `${bridgeJs}</head>`);
-
-        // 3. Update form inputs to use correct POST parameters
-        const inputName = isRe ? 'g-recaptcha-response' : 'h-captcha-response';
-        html = html.replace('name="g-recaptcha-response"', `name="${inputName}"`);
-        html = html.replace('name="h-captcha-response"', `name="${inputName}"`);
+        html = html.replace('</body>', `${captchaInject}</body>`);
       }
-      
+
       res.send(html);
     } catch (e) {
       res.status(404).send('Portal file not found');
@@ -920,8 +1080,10 @@ ok
   // --- Captive Portal Redirection Middleware ---
   app.use(async (req, res, next) => {
     const p = req.path;
-    // Do not intercept captive portal assets, direct requests, or config APIs
+    // Do not intercept captive portal assets, /login (pifi.me/login), direct requests, or config APIs
     if (
+      p === '/login' ||
+      p.startsWith('/login/') ||
       p.startsWith('/portal') || 
       p.startsWith('/api/portal') || 
       p.startsWith('/api/config') ||
@@ -932,7 +1094,7 @@ ok
     }
 
     const config = loadConfig();
-    if (config.wifi_mode !== 'AP') {
+    if (config.wifi_mode !== 'AP' || config.portal_enabled === false) {
       return next();
     }
 

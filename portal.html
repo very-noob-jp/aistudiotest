@@ -4,21 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Residential Wi-Fi Service | My Home Portal</title>
-    <!-- ★ reCAPTCHA / hCaptcha APIの読み込み (server.tsでプロバイダに応じて動的に置換) -->
-    <script src="https://www.recaptcha.net/recaptcha/api.js?onload=onCaptchaScriptLoaded&render=explicit" async defer></script>
     <style>
         :root {
             --primary-color: #003366; 
             --secondary-color: #005b9f; 
             --accent-color: #0099ff;
-            --text-dark: #2c3e50;
-            --text-gray: #5c6b7a;
-            --text-light: #9ba4b5;
-            --bg-color: #f0f4f8;
+            --text-dark: #1e293b;
+            --text-gray: #475569;
+            --text-light: #94a3b8;
+            --bg-color: #f1f5f9;
             --white: #ffffff;
             --border-radius: 12px;
             --box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
-            --transition: all 0.3s ease;
+            --transition: all 0.2s ease;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -43,49 +41,41 @@
             overflow: hidden;
         }
 
-        header::after {
-            content: ''; position: absolute;
-            top: -50%; right: -20%;
-            width: 300px; height: 300px;
-            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 70%);
-            border-radius: 50%;
-        }
+        .logo-area { display: flex; align-items: baseline; gap: 10px; max-width: 500px; margin: 0 auto; }
+        .logo-main { font-size: 22px; font-weight: 800; letter-spacing: 0.5px; }
+        .logo-sub { font-size: 11px; font-weight: 500; letter-spacing: 1px; border-left: 1px solid rgba(255,255,255,0.4); padding-left: 10px; opacity: 0.9; }
 
-        .logo-area { display: flex; align-items: baseline; gap: 10px; max-width: 600px; margin: 0 auto; }
-        .logo-main { font-size: 24px; font-weight: 800; letter-spacing: 1px; }
-        .logo-sub { font-size: 12px; font-weight: 400; letter-spacing: 1px; border-left: 1px solid rgba(255,255,255,0.4); padding-left: 10px; opacity: 0.9; }
+        main { padding: 28px 20px; flex-grow: 1; max-width: 500px; margin: 0 auto; width: 100%; }
 
-        main { padding: 30px 20px; flex-grow: 1; max-width: 500px; margin: 0 auto; width: 100%; }
-
-        .step-indicator { display: flex; justify-content: space-between; margin-bottom: 24px; padding: 0 10px; position: relative; }
-        .step { display: flex; flex-direction: column; align-items: center; position: relative; z-index: 1; }
-        .step-circle { width: 32px; height: 32px; border-radius: 50%; background: #e2e8f0; color: var(--text-gray); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; margin-bottom: 6px; }
+        .step-indicator { display: flex; justify-content: space-around; margin-bottom: 24px; padding: 0 10px; }
+        .step { display: flex; flex-direction: column; align-items: center; }
+        .step-circle { width: 30px; height: 30px; border-radius: 50%; background: #cbd5e1; color: var(--text-gray); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; margin-bottom: 6px; }
         .step.active .step-circle { background: var(--secondary-color); color: var(--white); }
         .step-label { font-size: 11px; color: var(--text-gray); font-weight: 500; }
-        .step.active .step-label { color: var(--secondary-color); font-weight: bold; }
+        .step.active .step-label { color: var(--secondary-color); font-weight: 700; }
 
         .card {
             background: var(--white);
             border-radius: var(--border-radius);
-            padding: 24px;
+            padding: 22px;
             box-shadow: var(--box-shadow);
-            margin-bottom: 20px;
-            border: 1px solid rgba(0,0,0,0.02);
+            margin-bottom: 18px;
+            border: 1px solid #e2e8f0;
         }
 
         .card-title {
-            font-size: 18px;
+            font-size: 17px;
             font-weight: 700;
             color: var(--primary-color);
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
-        .card-title svg { width: 22px; height: 22px; fill: var(--secondary-color); }
+        .card-title svg { width: 20px; height: 20px; fill: var(--secondary-color); }
 
-        .description { font-size: 13px; color: var(--text-gray); margin-bottom: 16px; line-height: 1.5; }
+        .description { font-size: 13px; color: var(--text-gray); margin-bottom: 14px; line-height: 1.5; }
 
         .info-grid {
             display: grid;
@@ -98,100 +88,76 @@
         }
 
         .info-item { display: flex; flex-direction: column; }
-        .info-label { font-size: 10px; color: var(--text-light); text-transform: uppercase; font-weight: 600; }
-        .info-value { font-size: 12px; font-weight: 600; color: var(--text-dark); margin-top: 2px; }
+        .info-label { font-size: 10px; color: var(--text-light); font-weight: 600; }
+        .info-value { font-size: 12px; font-weight: 700; color: var(--text-dark); margin-top: 2px; font-family: monospace; }
 
-        .tos-container { margin-bottom: 20px; }
+        .tos-container { margin-bottom: 18px; }
         .tos-header { font-size: 13px; font-weight: 700; color: var(--text-dark); margin-bottom: 8px; }
         .tos-box {
             background: var(--white);
             border: 1px solid #cbd5e1;
             border-radius: 8px;
             padding: 14px;
-            height: 120px;
+            height: 135px;
             overflow-y: scroll;
-            font-size: 11px;
+            font-size: 11.5px;
             color: var(--text-gray);
             line-height: 1.6;
         }
 
         .tos-box h4 { color: var(--text-dark); margin: 8px 0 3px 0; font-size: 12px; }
+        .tos-box h4:first-child { margin-top: 0; }
         .tos-box p { margin-bottom: 6px; }
-        .tos-box ul { padding-left: 18px; margin-bottom: 6px; }
 
         .agree-container {
             display: flex;
             align-items: center;
             gap: 12px;
-            margin-bottom: 20px;
+            margin-bottom: 18px;
             cursor: pointer;
             background: var(--white);
-            padding: 14px;
+            padding: 14px 16px;
             border-radius: 8px;
-            border: 1px solid #e2e8f0;
+            border: 2px solid #cbd5e1;
             transition: var(--transition);
         }
 
-        .agree-container:hover { border-color: var(--secondary-color); }
+        .agree-container:hover { border-color: var(--secondary-color); background: #f8fafc; }
         .agree-container input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--secondary-color); cursor: pointer; flex-shrink: 0; }
-        .agree-text { font-size: 13px; font-weight: 600; color: var(--text-dark); }
-        .agree-subtext { font-size: 11px; color: var(--text-light); }
+        .agree-text { font-size: 13.5px; font-weight: 700; color: var(--text-dark); }
+        .agree-subtext { font-size: 11px; color: var(--text-gray); }
 
-        .captcha-card {
+        .passcode-card {
+            display: none;
             background: var(--white);
             border-radius: var(--border-radius);
-            padding: 20px;
-            box-shadow: var(--box-shadow);
-            margin-bottom: 20px;
-            text-align: center;
-            border: 1px solid #e2e8f0;
+            padding: 18px;
+            margin-bottom: 18px;
+            border: 1px solid #cbd5e1;
         }
-
-        .captcha-title {
-            font-weight: 700;
-            font-size: 14px;
-            color: var(--primary-color);
-            margin-bottom: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-        }
-
-        .captcha-wrapper {
-            min-height: 78px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            position: relative;
-            margin: 10px 0;
-        }
-
-        .captcha-loading {
-            position: absolute;
+        .passcode-card label {
+            display: block;
             font-size: 13px;
-            color: var(--text-gray);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            z-index: 0;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 8px;
         }
-
-        .captcha-spinner {
-            width: 18px;
-            height: 18px;
-            border: 2px solid #cbd5e1;
-            border-top-color: var(--secondary-color);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
+        .passcode-input {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            font-family: monospace;
+            border: 1px solid #94a3b8;
+            border-radius: 6px;
+            text-align: center;
+            letter-spacing: 2px;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
 
         .btn-submit {
             width: 100%;
             padding: 16px;
             background: #cbd5e1;
-            color: #94a3b8;
+            color: #64748b;
             border: none;
             border-radius: 8px;
             font-size: 15px;
@@ -202,7 +168,6 @@
             align-items: center;
             justify-content: center;
             gap: 8px;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
         }
 
         .btn-submit.active {
@@ -216,12 +181,12 @@
             box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
         }
 
-        footer { text-align: center; padding: 20px; font-size: 11px; color: var(--text-light); margin-top: auto; }
+        footer { text-align: center; padding: 20px; font-size: 11px; color: var(--text-gray); margin-top: auto; }
         
         .admin-link {
-            color: #9ba4b5; text-decoration: none; margin-top: 15px; display: inline-block;
-            font-size: 12px; border: 1px solid #e2e8f0; padding: 8px 16px; border-radius: 20px;
-            transition: all 0.3s ease; background-color: var(--white);
+            color: #475569; text-decoration: none; margin-top: 12px; display: inline-block;
+            font-size: 12px; border: 1px solid #cbd5e1; padding: 7px 16px; border-radius: 6px;
+            transition: all 0.2s ease; background-color: var(--white); font-weight: 600;
         }
         .admin-link:hover { background-color: #e2e8f0; color: var(--text-dark); }
     </style>
@@ -231,34 +196,34 @@
 <header>
     <div class="logo-area">
         <div class="logo-main">Guest Wi-Fi</div>
-        <div class="logo-sub">RESIDENTIAL NETWORK</div>
+        <div class="logo-sub">HIGH-SPEED GATEWAY</div>
     </div>
 </header>
 
 <main>
     <div class="step-indicator">
         <div class="step active"><div class="step-circle">1</div><div class="step-label">規約確認</div></div>
-        <div class="step active"><div class="step-circle">2</div><div class="step-label">セキュリティ</div></div>
+        <div class="step active"><div class="step-circle">2</div><div class="step-label">ワンタップ承認</div></div>
         <div class="step"><div class="step-circle">3</div><div class="step-label">接続完了</div></div>
     </div>
 
     <div class="card">
         <div class="card-title">
             <svg viewBox="0 0 24 24"><path d="M12 21C10.6 21 9.5 19.9 9.5 18.5C9.5 17.1 10.6 16 12 16C13.4 16 14.5 17.1 14.5 18.5C14.5 19.9 13.4 21 12 21ZM12 12C8.6 12 5.5 13.5 3.5 15.8L4.9 17.2C6.6 15.2 9.2 14 12 14C14.8 14 17.4 15.2 19.1 17.2L20.5 15.8C18.5 13.5 15.4 12 12 12ZM12 7C7.3 7 3.1 9 0 12.2L1.4 13.6C4.1 10.8 7.9 9 12 9C16.1 9 19.9 10.8 22.6 13.6L24 12.2C20.9 9 16.7 7 12 7ZM12 2C5.9 2 0.4 4.5 -3.5 8.3L-2.1 9.7C1.4 6.3 6.4 4 12 4C17.6 4 22.6 6.3 26.1 9.7L27.5 8.3C23.6 4.5 18.1 2 12 2Z"/></svg>
-            ネットワークアクセス
+            Wi-Fi インターネット接続
         </div>
         <p class="description">
-            当ネットワークをご利用いただくには、以下の利用規約への同意およびセキュリティ確認（reCAPTCHA）が必要です。
+            当ネットワークをご利用いただくには、以下の利用規約をご確認のうえ「同意する」にチェックを入れて接続ボタンを押してください。
         </p>
 
         <div class="info-grid">
             <div class="info-item">
                 <div class="info-label">SSID</div>
-                <div class="info-value">Free_WiFi_Pi</div>
+                <div class="info-value" id="portal-ssid">Free_WiFi_Pi</div>
             </div>
             <div class="info-item">
-                <div class="info-label">Security</div>
-                <div class="info-value">WPA2-PSK</div>
+                <div class="info-label">Gateway</div>
+                <div class="info-value">pifi.me</div>
             </div>
         </div>
     </div>
@@ -267,128 +232,76 @@
         <div class="tos-header">利用規約 (Terms of Service)</div>
         <div class="tos-box">
             <h4>第1条（本規約の適用）</h4>
-            <p>本規約は、本ネットワーク管理者（以下「管理者」）が提供するWi-Fi接続サービス（以下「本サービス」）の利用に関わる一切の条件を定めるものです。利用者は、本サービスに接続した時点で本規約に同意したものとみなされます。</p>
+            <p>本規約は、本ネットワーク管理者が提供するWi-Fi接続サービス（以下「本サービス」）の利用条件を定めるものです。本サービスに接続した時点で本規約に同意したものとみなされます。</p>
             <h4>第2条（通信の暗号化とセキュリティ）</h4>
-            <p>本サービスをご利用の際は、安全のためSSL/TLS接続等の暗号化通信を自らの責任においてご利用ください。</p>
+            <p>安全のため、HTTPS / SSL等の暗号化通信を推奨します。重要な個人情報や決済情報の送信は利用者自身の責任において行ってください。</p>
             <h4>第3条（禁止事項）</h4>
-            <p>法令または公序良俗に違反する行為、インフラへの過度な負荷をかける行為は禁止します。</p>
-            <h4>第4条（セキュリティ認証）</h4>
-            <p>不正アクセス防止のため、接続時にGoogle reCAPTCHAによるセキュリティ評価を実施します。</p>
+            <p>法令または公序良俗に違反する行為、大容量通信による帯域独占、不正アクセス行為、他の利用者への迷惑行為は固く禁止します。</p>
+            <h4>第4条（免責事項）</h4>
+            <p>本サービスの利用により生じたいかなる損害についても、管理者は一切の責任を負いません。メンテナンス等により予告なく通信を遮断する場合があります。</p>
         </div>
     </div>
 
-    <label class="agree-container" for="agree-check">
-        <input type="checkbox" id="agree-check" onchange="updateButtonState()">
-        <div>
-            <div class="agree-text">上記の利用規約に同意する</div>
-            <div class="agree-subtext">I agree to the Terms of Service.</div>
-        </div>
-    </label>
-
-    <!-- ★ reCAPTCHA / hCaptcha 直接表示コンテナ -->
-    <div class="captcha-card">
-        <div class="captcha-title">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1ZM12 11.99H19C18.47 16.11 15.72 19.78 12 20.92V12H5V6.3L12 3.19V11.99Z"/></svg>
-            セキュリティ確認 (Security Check)
-        </div>
-        <div class="captcha-wrapper">
-            <div class="captcha-loading" id="captcha-loading-indicator">
-                <div class="captcha-spinner"></div>
-                <span>認証ボックスを読み込み中...</span>
+    <form id="auth-form" action="/api/portal/connect" method="POST" onsubmit="return handleFormSubmit(event)">
+        <label class="agree-container" for="agree-check">
+            <input type="checkbox" id="agree-check" checked onchange="updateButtonState()">
+            <div>
+                <div class="agree-text">上記の利用規約に同意する</div>
+                <div class="agree-subtext">I agree to the Terms of Service.</div>
             </div>
-            <div id="captcha-render-target">
-                <!-- Fallback standard div if explicit render is pending -->
-                <div class="g-recaptcha" data-sitekey="6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI" data-callback="onCaptchaSuccess"></div>
-            </div>
-        </div>
-        <div style="font-size: 11px; margin-top: 6px;">
-            <a href="javascript:void(0)" onclick="window.location.reload()" style="color: var(--secondary-color); text-decoration: none;">
-                画面が表示されない場合はこちら（再読み込み）
-            </a>
-        </div>
-    </div>
+        </label>
 
-    <button type="button" id="connect-btn" class="btn-submit" onclick="submitAuthForm()" disabled>
-        インターネットに接続する (Connect)
-    </button>
+        <div id="passcode-section" class="passcode-card">
+            <label for="passcode-input">ゲスト接続パスコード (Passcode)</label>
+            <input type="password" name="passcode" id="passcode-input" class="passcode-input" placeholder="パスコードを入力">
+        </div>
 
-    <!-- ★ トークン送信フォーム -->
-    <form id="auth-form" action="/api/portal/connect" method="POST" style="display:none;">
-        <input type="hidden" name="g-recaptcha-response" id="captcha-token-input">
+        <button type="submit" id="connect-btn" class="btn-submit active">
+            インターネットに接続する (Connect to Internet)
+        </button>
     </form>
 </main>
 
 <footer>
-    &copy; 2026 Residential Wi-Fi Gateway. All rights reserved.<br>
-    <a href="/" class="admin-link">
-        <svg viewBox="0 0 24 24" width="14" height="14" style="fill: currentColor; vertical-align: middle; margin-right: 4px;"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.06-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.73,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.06,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.49-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
-        ルーター管理画面 (Admin Settings)
+    &copy; 2026 PiFi Enterprise Router Gateway.<br>
+    <a href="/login" class="admin-link">
+        ルーター管理画面ログイン (pifi.me/login)
     </a>
 </footer>
 
 <script>
-    var currentCaptchaToken = "";
     var isSubmitting = false;
-
-    function onCaptchaSuccess(token) {
-        currentCaptchaToken = token;
-        var tokenInput = document.getElementById('captcha-token-input');
-        if (tokenInput) tokenInput.value = token;
-        
-        var loader = document.getElementById('captcha-loading-indicator');
-        if (loader) loader.style.display = 'none';
-
-        var agreeCheck = document.getElementById('agree-check');
-        if (!agreeCheck.checked) {
-            agreeCheck.checked = true;
-        }
-        updateButtonState();
-
-        // Auto submit on captcha check for maximum seamlessness
-        setTimeout(function() {
-            submitAuthForm();
-        }, 500);
-    }
 
     function updateButtonState() {
         var agree = document.getElementById('agree-check').checked;
         var btn = document.getElementById('connect-btn');
-        if (agree && (currentCaptchaToken || window.captchaVerifiedFallback)) {
+        if (agree) {
             btn.disabled = false;
             btn.classList.add('active');
-            btn.innerHTML = 'インターネットに接続する (Connect)';
         } else {
-            btn.disabled = !agree;
-            if (agree) {
-                btn.classList.add('active');
-                btn.innerHTML = 'セキュリティ認証を完了してください';
-            } else {
-                btn.classList.remove('active');
-                btn.innerHTML = 'インターネットに接続する (Connect)';
-            }
+            btn.disabled = true;
+            btn.classList.remove('active');
         }
     }
 
-    function submitAuthForm() {
-        if (isSubmitting) return;
+    function handleFormSubmit(e) {
         var agree = document.getElementById('agree-check').checked;
         if (!agree) {
-            alert('利用規約に同意してください。');
-            return;
+            e.preventDefault();
+            return false;
         }
-
+        if (isSubmitting) {
+            e.preventDefault();
+            return false;
+        }
         isSubmitting = true;
         var btn = document.getElementById('connect-btn');
         btn.disabled = true;
-        btn.innerHTML = '認証処理中... 接続しています';
-
-        // If no token but user clicked, pass a fallback test token so testing always succeeds
-        var tokenInput = document.getElementById('captcha-token-input');
-        if (!tokenInput.value) {
-            tokenInput.value = currentCaptchaToken || "test_token_bypass";
-        }
-        document.getElementById('auth-form').submit();
+        btn.innerHTML = '認証処理中... ネットワークを開放しています';
+        return true;
     }
+
+    updateButtonState();
 </script>
 
 </body>

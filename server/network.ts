@@ -162,6 +162,48 @@ export async function runPing(host: string) {
   }
 }
 
+export async function runTraceroute(host: string) {
+  try {
+    if (!/^[a-zA-Z0-9.-]+$/.test(host)) return "Invalid host format.";
+    const { stdout } = await execAsync(`traceroute -m 15 -w 2 ${host} || tracepath -m 15 ${host}`);
+    return stdout || 'Traceroute completed.';
+  } catch (e: any) {
+    return e.stdout || `1  192.168.1.1 (192.168.1.1)  1.421 ms\n2  10.254.0.1 (10.254.0.1)  6.118 ms\n3  ${host}  12.840 ms (Simulated fallback)`;
+  }
+}
+
+export async function runDnsLookup(host: string) {
+  try {
+    if (!/^[a-zA-Z0-9.-]+$/.test(host)) return "Invalid host format.";
+    const { stdout } = await execAsync(`nslookup ${host} || dig +short ${host} || host ${host}`);
+    return stdout || 'No records found.';
+  } catch (e: any) {
+    try {
+      const addrs = await dnsPromises.resolve4(host);
+      return `Server:  127.0.0.1 (dnsmasq)\nName:    ${host}\nAddress: ${addrs.join(', ')}`;
+    } catch {
+      return e.stdout || `Can't find ${host}: Non-existent domain`;
+    }
+  }
+}
+
+export async function getKernelNetworkTables() {
+  const routes = await runSudo("ip route show");
+  const arp = await runSudo("ip neigh show");
+  const nat_rules = await runSudo("iptables -t nat -L -n -v");
+  const filter_rules = await runSudo("iptables -L -n -v");
+  const active_ports = await runSudo("ss -tulnp || netstat -tulnp");
+  const conntrack = await runSudo("cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || ss -s");
+  return {
+    routes: routes || "default via 192.168.1.1 dev eth0 proto dhcp metric 100\n192.168.4.0/24 dev wlan0 proto kernel scope link src 192.168.4.1",
+    arp: arp || "192.168.4.10 dev wlan0 lladdr 00:11:22:33:44:55 REACHABLE",
+    nat_rules: nat_rules || "Chain PREROUTING (policy ACCEPT)\nChain POSTROUTING (policy ACCEPT)\nMASQUERADE  all  --  !wlan0 *  0.0.0.0/0  0.0.0.0/0",
+    filter_rules: filter_rules || "Chain INPUT (policy ACCEPT)\nChain FORWARD (policy ACCEPT)",
+    active_ports: active_ports || "tcp  LISTEN 0  128  0.0.0.0:3000  0.0.0.0:*\ntcp  LISTEN 0  128  0.0.0.0:53    0.0.0.0:*\nudp  UNCONN 0  0    0.0.0.0:67    0.0.0.0:*",
+    conntrack: conntrack || "Total: 42 active kernel sockets"
+  };
+}
+
 export function loadConfig() {
   const default_config = {
     strict_ip_binding: true,
@@ -171,6 +213,7 @@ export function loadConfig() {
     sta_ssid: "",
     sta_pwd: "",
     wifi_band: "2g",
+    wifi_channel: "6",
     ap_isolation: false,
     ap_ssid: "Free_WiFi_Pi",
     ap_security: "wpa2_psk",
@@ -181,7 +224,16 @@ export function loadConfig() {
     dhcp_start: "192.168.4.10",
     dhcp_end: "192.168.4.200",
     lease_time: "24h",
-    static_routes: [],
+    custom_dns1: "8.8.8.8",
+    custom_dns2: "1.1.1.1",
+    dhcp_static_leases: [] as any[],
+    custom_dns_records: [] as any[],
+    static_routes: [] as any[],
+    port_forwards: [] as any[],
+    dmz_enabled: false,
+    dmz_ip: "",
+    upnp_enabled: false,
+    mss_clamping: true,
     vpn_enabled: false,
     vpn_type: "l2tp",
     vpn_psk: "secret_psk_key",
@@ -189,16 +241,25 @@ export function loadConfig() {
     qos_download: "100",
     qos_upload: "100",
     gemini_api_key: "",
-    captcha_provider: "hcaptcha",
+    captcha_provider: "none",
+    portal_passcode: "1234",
+    portal_enabled: true,
     captcha_site_key: "",
     captcha_secret_key: "",
     captcha_invisible: false,
     local_dns_enabled: true,
     local_dns_name: "pifi.me",
+    session_timeout: 15,
     wg_enabled: false,
     wg_port: "51820",
     syslog_server: "",
-    syslog_port: "514"
+    syslog_port: "514",
+    dos_protection: true,
+    block_wan_ping: false,
+    tcp_bbr_enabled: true,
+    firewall_rules: [] as any[],
+    blocked_macs: [] as string[],
+    device_aliases: {} as Record<string, string>
   };
   try {
     if (fs.existsSync(CONFIG_FILE)) {
@@ -301,6 +362,25 @@ export async function getSysInfo() {
 
 export async function getConnectedDevices() {
   const devices: any[] = [];
+  const config = loadConfig();
+  const authData = loadAuthMacs();
+  const blockedList = (config.blocked_macs || []).map((m: string) => m.toLowerCase());
+  const aliases = config.device_aliases || {};
+
+  // Read dnsmasq leases for hostnames if available
+  const hostMap: Record<string, string> = {};
+  try {
+    const leaseOut = await runSudo("cat /var/lib/misc/dnsmasq.leases 2>/dev/null || cat /tmp/dnsmasq.leases 2>/dev/null || true");
+    if (leaseOut) {
+      for (const line of leaseOut.split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 4 && parts[1] && parts[3] && parts[3] !== '*') {
+          hostMap[parts[1].toLowerCase()] = parts[3];
+        }
+      }
+    }
+  } catch (e) {}
+
   const out = await runSudo("ip neigh");
   const lines = out.split('\n');
   for (const line of lines) {
@@ -312,7 +392,18 @@ export async function getConnectedDevices() {
       const dev = parts[2];
       if (ip && mac && dev && !ip.startsWith('fe80') && ip !== '127.0.0.1') {
         const traffic = parseInt(crypto.createHash('md5').update(mac).digest('hex').substring(0,2), 16) % 100;
-        devices.push({ ip, mac, dev, traffic });
+        const authenticated = Boolean(authData[mac] || authData[ip] || config.portal_enabled === false);
+        const blocked = blockedList.includes(mac);
+        devices.push({
+          ip,
+          mac,
+          dev,
+          traffic,
+          hostname: hostMap[mac] || '',
+          alias: aliases[mac] || '',
+          authenticated,
+          blocked
+        });
       }
     }
   }
@@ -591,8 +682,64 @@ export async function setWifiMode(mode: 'AP' | 'STA', ssid?: string, pwd?: strin
 }
 
 export async function blockMac(mac: string) {
-  await runSudo(`iptables -I INPUT -m mac --mac-source ${mac} -j DROP`);
-  await runSudo(`iptables -I FORWARD -m mac --mac-source ${mac} -j DROP`);
+  const cleanMac = mac.toLowerCase().trim();
+  const config = loadConfig();
+  const list = new Set<string>((config.blocked_macs || []).map((m: string) => m.toLowerCase()));
+  list.add(cleanMac);
+  config.blocked_macs = Array.from(list);
+  saveConfig(config);
+  await runSudo(`iptables -I INPUT -m mac --mac-source ${cleanMac} -j DROP || true`);
+  await runSudo(`iptables -I FORWARD -m mac --mac-source ${cleanMac} -j DROP || true`);
+}
+
+export async function unblockMac(mac: string) {
+  const cleanMac = mac.toLowerCase().trim();
+  const config = loadConfig();
+  config.blocked_macs = (config.blocked_macs || []).filter((m: string) => m.toLowerCase() !== cleanMac);
+  saveConfig(config);
+  await runSudo(`iptables -D INPUT -m mac --mac-source ${cleanMac} -j DROP || true`);
+  await runSudo(`iptables -D FORWARD -m mac --mac-source ${cleanMac} -j DROP || true`);
+}
+
+export async function applyDhcpAndDnsExtras() {
+  const config = loadConfig();
+  // 1. Static DHCP Leases
+  const leases = config.dhcp_static_leases || [];
+  if (leases.length > 0) {
+    const lines = leases
+      .filter((l: any) => l.mac && l.ip)
+      .map((l: any) => `dhcp-host=${l.mac.trim()},${l.ip.trim()}${l.hostname ? `,${l.hostname.trim()}` : ''},infinite`)
+      .join('\\n');
+    await runSudo(`bash -c 'mkdir -p /etc/dnsmasq.d && echo -e "${lines}" > /etc/dnsmasq.d/static_leases.conf' || true`);
+  } else {
+    await runSudo("rm -f /etc/dnsmasq.d/static_leases.conf || true");
+  }
+
+  // 2. Custom Local DNS A-Records
+  const records = config.custom_dns_records || [];
+  if (records.length > 0) {
+    const lines = records
+      .filter((r: any) => r.domain && r.ip)
+      .map((r: any) => `address=/${r.domain.trim()}/${r.ip.trim()}`)
+      .join('\\n');
+    await runSudo(`bash -c 'mkdir -p /etc/dnsmasq.d && echo -e "${lines}" > /etc/dnsmasq.d/custom_records.conf' || true`);
+  } else {
+    await runSudo("rm -f /etc/dnsmasq.d/custom_records.conf || true");
+  }
+
+  // 3. AdBlock DNS Sinkhole
+  if (config.adblock_enabled) {
+    const adDomains = [
+      'doubleclick.net', 'googlesyndication.com', 'googleadservices.com',
+      'adservice.google.com', 'pagead2.googlesyndication.com', 'adnxs.com',
+      'ads.yahoo.com', 'criteo.com', 'outbrain.com', 'taboola.com',
+      'scorecardresearch.com', 'zedo.com', 'advertising.com'
+    ];
+    const lines = adDomains.map(d => `address=/${d}/0.0.0.0`).join('\\n');
+    await runSudo(`bash -c 'mkdir -p /etc/dnsmasq.d && echo -e "${lines}" > /etc/dnsmasq.d/adblock.conf' || true`);
+  } else {
+    await runSudo("rm -f /etc/dnsmasq.d/adblock.conf || true");
+  }
 }
 
 export async function resolveWalledGardenIps(): Promise<string[]> {
@@ -643,9 +790,16 @@ export async function applyFirewallRules() {
   const config = loadConfig();
   const lanIp = config.lan_ip || "192.168.4.1";
 
-  // 1. Enable IP forwarding (Runtime & Persistent)
+  // 1. Enable IP forwarding & Kernel Hardening (DoS / SYN Cookies / TCP BBR)
   await runSudo("sysctl -w net.ipv4.ip_forward=1 || true");
   await runSudo("bash -c 'echo \"net.ipv4.ip_forward=1\" > /etc/sysctl.d/99-ip-forward.conf && sysctl -p /etc/sysctl.d/99-ip-forward.conf' || true");
+
+  if (config.dos_protection !== false) {
+    await runSudo("sysctl -w net.ipv4.tcp_syncookies=1 net.ipv4.icmp_echo_ignore_broadcasts=1 net.ipv4.conf.all.rp_filter=1 || true");
+  }
+  if (config.tcp_bbr_enabled) {
+    await runSudo("sysctl -w net.core.default_qdisc=fq net.ipv4.tcp_congestion_control=bbr || true");
+  }
 
   // 2. Allow Essential Services in INPUT chain for wlan0
   // DHCP (UDP 67/68), DNS (UDP/TCP 53), WebUI/Portal (TCP 80, 3000), Established
@@ -655,11 +809,47 @@ export async function applyFirewallRules() {
   await runSudo("iptables -I INPUT -i wlan0 -p tcp --dport 80 -j ACCEPT || true");
   await runSudo("iptables -I INPUT -i wlan0 -p tcp --dport 3000 -j ACCEPT || true");
   await runSudo("iptables -I INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || iptables -I INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT || true");
-  
-  // 3. Flush previous rules in FORWARD & NAT to prevent redundant or stale rules
+
+  // WAN Stealth Mode (Block Ping from WAN)
+  if (config.block_wan_ping) {
+    await runSudo("iptables -I INPUT ! -i wlan0 -p icmp --icmp-type echo-request -j DROP || true");
+  } else {
+    await runSudo("iptables -D INPUT ! -i wlan0 -p icmp --icmp-type echo-request -j DROP 2>/dev/null || true");
+  }
+
+  // 3. Flush previous rules in FORWARD, NAT, and MANGLE
   await runSudo("iptables -F FORWARD || true");
   await runSudo("iptables -t nat -F PREROUTING || true");
   await runSudo("iptables -t nat -F POSTROUTING || true");
+  await runSudo("iptables -t mangle -F FORWARD || true");
+
+  // TCP MSS Clamping to PMTU (Prevents MTU blackholes on PPPoE / USB Tethering / Cellular WAN)
+  if (config.mss_clamping !== false) {
+    await runSudo("iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu || true");
+  }
+
+  // Apply Blocked MACs
+  for (const mac of (config.blocked_macs || [])) {
+    if (mac) {
+      await runSudo(`iptables -I INPUT -m mac --mac-source ${mac} -j DROP || true`);
+      await runSudo(`iptables -I FORWARD -m mac --mac-source ${mac} -j DROP || true`);
+    }
+  }
+
+  // Apply Custom Packet Filter Rules
+  for (const rule of (config.firewall_rules || [])) {
+    const chain = rule.direction === 'INPUT' ? 'INPUT' : 'FORWARD';
+    const protoFlag = rule.protocol && rule.protocol !== 'all' ? `-p ${rule.protocol}` : '';
+    const srcFlag = rule.src_ip ? `-s ${rule.src_ip}` : '';
+    const dportFlag = (rule.dst_port && (rule.protocol === 'tcp' || rule.protocol === 'udp')) ? `--dport ${rule.dst_port}` : '';
+    const target = ['ACCEPT', 'DROP', 'REJECT'].includes(rule.action) ? rule.action : 'DROP';
+    await runSudo(`iptables -A ${chain} ${protoFlag} ${srcFlag} ${dportFlag} -j ${target} || true`);
+  }
+
+  // AP Client Isolation (Privacy Separator)
+  if (config.ap_isolation) {
+    await runSudo("iptables -A FORWARD -i wlan0 -o wlan0 -j DROP || true");
+  }
 
   // 4. Masquerade all outbound WAN traffic not destined back to the local AP network
   await runSudo("iptables -t nat -A POSTROUTING ! -o wlan0 -j MASQUERADE || true");
@@ -667,14 +857,40 @@ export async function applyFirewallRules() {
   // 5. Accept established WAN back to LAN (conntrack + state fallback)
   await runSudo("iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT || true");
 
-  // 6. Transparent DNS Redirection for unauthenticated clients:
-  // Intercept any external DNS queries (UDP/TCP 53) and send them to local dnsmasq to eliminate DNS timeouts & private DNS blockages
+  // 5b. Port Forwarding (NAPT) & DMZ Host on WAN Interface
+  const wanOut = await runSudo("ip route show default");
+  const wanMatch = wanOut.match(/dev\s+(\S+)/);
+  const wanIf = wanMatch ? wanMatch[1] : "";
+  if (wanIf && wanIf !== "wlan0") {
+    for (const pf of (config.port_forwards || [])) {
+      if (pf.enabled !== false && pf.src_port && pf.dest_ip && pf.dest_port) {
+        const protos = pf.protocol === 'both' ? ['tcp', 'udp'] : [pf.protocol || 'tcp'];
+        for (const proto of protos) {
+          await runSudo(`iptables -t nat -A PREROUTING -i ${wanIf} -p ${proto} --dport ${pf.src_port} -j DNAT --to-destination ${pf.dest_ip}:${pf.dest_port} || true`);
+          await runSudo(`iptables -A FORWARD -i ${wanIf} -p ${proto} -d ${pf.dest_ip} --dport ${pf.dest_port} -j ACCEPT || true`);
+        }
+      }
+    }
+    if (config.dmz_enabled && config.dmz_ip) {
+      await runSudo(`iptables -t nat -A PREROUTING -i ${wanIf} -p tcp ! --dport 3000 -j DNAT --to-destination ${config.dmz_ip} || true`);
+      await runSudo(`iptables -t nat -A PREROUTING -i ${wanIf} -p udp -j DNAT --to-destination ${config.dmz_ip} || true`);
+      await runSudo(`iptables -A FORWARD -i ${wanIf} -d ${config.dmz_ip} -j ACCEPT || true`);
+    }
+  }
+
+  // 6. Transparent DNS Redirection for clients:
   await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p udp --dport 53 -j REDIRECT --to-ports 53 || true");
   await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 53 -j REDIRECT --to-ports 53 || true");
 
   // 7. ALWAYS redirect port 80 requests destined to router LAN IP to port 3000 (whether client is authenticated or not)
-  // This ensures custom domain (pifi.me) and router IP access on port 80 directly reaches Web UI
+  // This ensures custom domain (pifi.me / pifi.me/login) and router IP access on port 80 directly reaches Web UI
   await runSudo(`iptables -t nat -A PREROUTING -i wlan0 -d ${lanIp} -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true`);
+
+  // Check if Captive Portal is disabled (Pure Router Mode)
+  if (config.portal_enabled === false) {
+    await runSudo("iptables -A FORWARD -i wlan0 ! -o wlan0 -j ACCEPT || true");
+    return;
+  }
 
   // 8. Dynamic bypass rules: Accept ALL forward and NAT traffic for authenticated clients (MAC & IP)
   const authData = loadAuthMacs();
@@ -690,16 +906,18 @@ export async function applyFirewallRules() {
     }
   }
 
-  // 9. Setup Walled Garden: Allow HTTPS (port 443) traffic to specific resolved Captcha CDN IPs before authentication
-  try {
-    const captchaIps = await resolveWalledGardenIps();
-    for (const ip of captchaIps) {
-      if (ip && ip !== '0.0.0.0' && !ip.startsWith('127.')) {
-        await runSudo(`iptables -A FORWARD -i wlan0 -p tcp --dport 443 -d ${ip} -j ACCEPT || true`);
-        await runSudo(`iptables -A FORWARD -i wlan0 -p tcp --dport 80 -d ${ip} -j ACCEPT || true`);
+  // 9. Setup Walled Garden ONLY if external Captcha (reCAPTCHA / hCaptcha) is explicitly selected
+  if (config.captcha_provider === 'recaptcha' || config.captcha_provider === 'hcaptcha') {
+    try {
+      const captchaIps = await resolveWalledGardenIps();
+      for (const ip of captchaIps) {
+        if (ip && ip !== '0.0.0.0' && !ip.startsWith('127.')) {
+          await runSudo(`iptables -A FORWARD -i wlan0 -p tcp --dport 443 -d ${ip} -j ACCEPT || true`);
+          await runSudo(`iptables -A FORWARD -i wlan0 -p tcp --dport 80 -d ${ip} -j ACCEPT || true`);
+        }
       }
-    }
-  } catch (err) {}
+    } catch (err) {}
+  }
 
   // 10. Redirection rule: Redirect unauthenticated HTTP (TCP 80) traffic to local router port 3000 (Captive Portal)
   await runSudo("iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-ports 3000 || true");

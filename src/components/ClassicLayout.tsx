@@ -50,12 +50,16 @@ export default function ClassicLayout({ onLogout }: { onLogout: () => void }) {
     <div className="min-h-screen bg-white text-[#333333] font-sans text-[13px]">
       {/* Header */}
       <div className="bg-[#003399] text-white px-5 py-3 flex justify-between items-center border-b-4 border-[#ff9900]">
-        <div className="text-[18px] font-bold">ルーター Web設定</div>
+        <div className="text-[18px] font-bold tracking-tight">PiFi Enterprise Router Web設定</div>
         {sysInfo && (
-          <div className="flex gap-4">
-            <span className="bg-white text-[#003399] px-3 py-0.5 rounded-full text-xs font-bold">WAN: {sysInfo.wan_if}</span>
-            <span className="bg-white text-[#003399] px-3 py-0.5 rounded-full text-xs font-bold">モード: {sysInfo.config_mode}</span>
-            <span className="text-xs self-center">{sysInfo.time}</span>
+          <div className="flex items-center gap-3 text-xs font-mono text-[#e2e8f0]">
+            <span>WAN: <strong className="text-white">{sysInfo.wan_if}</strong></span>
+            <span aria-hidden="true">·</span>
+            <span>モード: <strong className="text-white">{sysInfo.config_mode}</strong></span>
+            <span aria-hidden="true">·</span>
+            <span>Gateway: <strong className="text-white">pifi.me/login</strong></span>
+            <span aria-hidden="true">·</span>
+            <span>{sysInfo.time}</span>
           </div>
         )}
       </div>
@@ -63,37 +67,37 @@ export default function ClassicLayout({ onLogout }: { onLogout: () => void }) {
       <div className="flex h-[calc(100vh-54px)]">
         {/* Sidebar */}
         <div className="w-[240px] bg-[#f4f4f4] border-r border-[#cccccc] overflow-y-auto flex-shrink-0 flex flex-col">
-          <MenuCategory title="情報" items={[
+          <MenuCategory title="ステータス・監視" items={[
             { id: 'dashboard', label: '機器状態・構成図' },
-            { id: 'devices', label: '接続端末一覧' },
-            { id: 'monitor', label: 'ネットワーク監視 (新機能)' }
+            { id: 'devices', label: '接続端末・強制認証・MAC制御' },
+            { id: 'monitor', label: 'リアルタイム通信・DNS監視' }
           ]} active={activeTab} onSelect={setActiveTab} />
           
-          <MenuCategory title="基本設定" items={[
-            { id: 'network', label: 'LAN / DHCP設定' },
-            { id: 'wifi', label: '無線LAN (Wi-Fi) 設定' },
+          <MenuCategory title="LAN・無線設定" items={[
+            { id: 'network', label: 'LAN / DHCP固定予約 / DNS' },
+            { id: 'wifi', label: '無線LAN (AP / クライアント)' },
           ]} active={activeTab} onSelect={setActiveTab} />
 
-          <MenuCategory title="ルーティング・NAT" items={[
-            { id: 'routing', label: '静的ルーティング・NAPT' },
-            { id: 'qos', label: '帯域制御 (QoS)' },
+          <MenuCategory title="NAT・ルーティング・QoS" items={[
+            { id: 'routing', label: 'ポート開放(NAPT) / DMZ / 経路' },
+            { id: 'qos', label: '帯域制御 (トラフィックQoS)' },
           ]} active={activeTab} onSelect={setActiveTab} />
 
-          <MenuCategory title="高度な設定" items={[
-            { id: 'vpn', label: 'VPN (IPsec/L2TP) 設定' },
-            { id: 'advanced', label: 'ファイアウォール・フィルタ' },
-            { id: 'portal', label: 'キャプティブポータル' },
+          <MenuCategory title="セキュリティ・ポータル" items={[
+            { id: 'advanced', label: 'ファイアウォール・BBR・ACL' },
+            { id: 'portal', label: 'キャプティブポータル (CAPTCHA無)' },
+            { id: 'vpn', label: 'VPNサーバー (IPsec/WireGuard)' },
           ]} active={activeTab} onSelect={setActiveTab} />
 
-          <MenuCategory title="管理" items={[
-            { id: 'maintenance', label: '保守・ネットワーク診断' },
-            { id: 'cli', label: 'CLI 実行ログ・端末' },
-            { id: 'ai', label: 'AI アシスタント (Gemini)' },
+          <MenuCategory title="保守・診断・CLI" items={[
+            { id: 'maintenance', label: '診断・カーネル表・設定保存' },
+            { id: 'cli', label: 'ルートCLI端末・実行ログ' },
+            { id: 'ai', label: 'AI ネットワーク管理 (Gemini)' },
           ]} active={activeTab} onSelect={setActiveTab} />
 
           <div className="mt-auto p-4 border-t border-[#cccccc]">
-            <button onClick={onLogout} className="w-full bg-[#eeeeee] border border-[#888888] hover:bg-[#dddddd] py-1 text-sm">
-              ログアウト
+            <button onClick={onLogout} className="w-full bg-[#eeeeee] border border-[#888888] hover:bg-[#dddddd] py-1.5 text-xs font-bold cursor-pointer">
+              ログアウト (pifi.me/login へ)
             </button>
           </div>
         </div>
