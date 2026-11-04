@@ -1,3 +1,17 @@
+export interface NetworkInterfaceInfo {
+  name: string;
+  ip: string;
+  netmask: string;
+  mac: string;
+  family: string;
+  type: 'wlan' | 'lan' | 'virtual' | 'cellular' | 'other';
+  status: 'Up' | 'Down' | 'Unknown';
+  speed?: string;
+  is_default_wan: boolean;
+  is_configured_wan: boolean;
+  is_configured_lan: boolean;
+}
+
 export interface SysInfo {
   temp: string;
   mem: string;
@@ -5,9 +19,14 @@ export interface SysInfo {
   uptime: string;
   wifi_active: boolean;
   wan_if: string;
+  lan_if?: string;
   config_mode: string;
   time: string;
   cpu_freq?: string;
+  os_platform?: string;
+  os_arch?: string;
+  os_hostname?: string;
+  is_windows?: boolean;
 }
 
 export interface ConnectedDevice {
@@ -131,6 +150,9 @@ export interface RouterConfig {
   dos_protection?: boolean;
   block_wan_ping?: boolean;
   tcp_bbr_enabled?: boolean;
+  wan_interface?: string;
+  lan_interface?: string;
+  platform_os?: 'linux' | 'win32' | 'darwin' | 'other';
   firewall_rules?: FirewallFilterRule[];
   blocked_macs?: string[];
   device_aliases?: Record<string, string>;

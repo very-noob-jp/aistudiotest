@@ -125,7 +125,7 @@ export default function CLIMonitor() {
             type="text" 
             value={inputCmd}
             onChange={e => setInputCmd(e.target.value)}
-            placeholder="例: systemctl status hostapd, ip a, systemctl restart dnsmasq"
+            placeholder="例: netsh interface show interface, arp -a, route print, ip a, systemctl status hostapd"
             className="flex-1 bg-transparent text-[#ffffff] focus:outline-none py-2 font-mono text-xs"
             disabled={executing}
           />
@@ -133,11 +133,34 @@ export default function CLIMonitor() {
         <button 
           type="submit" 
           disabled={executing}
-          className="bg-[#003399] border border-[#002266] text-white px-5 py-2 text-xs font-bold hover:bg-[#0044cc] disabled:opacity-50"
+          className="bg-[#003399] border border-[#002266] text-white px-5 py-2 text-xs font-bold hover:bg-[#0044cc] disabled:opacity-50 cursor-pointer"
         >
           {executing ? '実行中...' : 'CLI実行'}
         </button>
       </form>
+
+      {/* Quick Command Chips */}
+      <div className="mt-2 flex flex-wrap gap-1.5 items-center text-[11px]">
+        <span className="text-[#666] font-bold">クイック実行:</span>
+        <button type="button" onClick={() => setInputCmd('netsh interface show interface')} className="bg-[#f1f5f9] hover:bg-[#e2e8f0] border border-[#cbd5e1] px-2 py-0.5 font-mono cursor-pointer">
+          [Win] netsh if show
+        </button>
+        <button type="button" onClick={() => setInputCmd('arp -a')} className="bg-[#f1f5f9] hover:bg-[#e2e8f0] border border-[#cbd5e1] px-2 py-0.5 font-mono cursor-pointer">
+          arp -a
+        </button>
+        <button type="button" onClick={() => setInputCmd('route print')} className="bg-[#f1f5f9] hover:bg-[#e2e8f0] border border-[#cbd5e1] px-2 py-0.5 font-mono cursor-pointer">
+          [Win] route print
+        </button>
+        <button type="button" onClick={() => setInputCmd('netsh wlan show interfaces')} className="bg-[#f1f5f9] hover:bg-[#e2e8f0] border border-[#cbd5e1] px-2 py-0.5 font-mono cursor-pointer">
+          [Win] netsh wlan
+        </button>
+        <button type="button" onClick={() => setInputCmd('systemctl status hostapd dnsmasq')} className="bg-[#f1f5f9] hover:bg-[#e2e8f0] border border-[#cbd5e1] px-2 py-0.5 font-mono cursor-pointer">
+          [Linux] hostapd status
+        </button>
+        <button type="button" onClick={() => setInputCmd('iptables -t nat -L -n -v')} className="bg-[#f1f5f9] hover:bg-[#e2e8f0] border border-[#cbd5e1] px-2 py-0.5 font-mono cursor-pointer">
+          [Linux] iptables nat
+        </button>
+      </div>
     </div>
   );
 }

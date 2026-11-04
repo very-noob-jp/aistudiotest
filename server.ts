@@ -9,7 +9,7 @@ import {
   setWifiMode, setupWifiAP, blockMac, unblockMac, reloadRouting, runSudo, PORTAL_FILE, getMacFromIp,
   loadAuthMacs, saveAuthMacs, addPortForward, applyQoS, applyLocalDns, applyDhcpAndDnsExtras,
   runPing, runTraceroute, runDnsLookup, getKernelNetworkTables, getCmdLogs,
-  getNetworkMonitorStats, getDnsQueryLogs
+  getNetworkMonitorStats, getDnsQueryLogs, getAvailableInterfaces, isWindows, isLinux
 } from './server/network.ts';
 
 const PORT = 3000;
@@ -92,6 +92,42 @@ async function startServer() {
     const newConfig = { ...config, ...req.body };
     saveConfig(newConfig);
     res.json({ success: true });
+  });
+
+  // Network Interfaces Detection & Mapping API
+  app.get('/api/interfaces', requireAdmin, async (req, res) => {
+    try {
+      const interfaces = await getAvailableInterfaces();
+      const config = loadConfig();
+      res.json({
+        interfaces,
+        os_platform: isWindows ? 'win32' : 'linux',
+        is_windows: isWindows,
+        wan_interface: config.wan_interface || (isWindows ? 'Wi-Fi' : 'eth0'),
+        lan_interface: config.lan_interface || (isWindows ? 'Ethernet' : 'wlan0')
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || 'Failed to detect network interfaces' });
+    }
+  });
+
+  app.post('/api/config/interfaces', requireAdmin, async (req, res) => {
+    try {
+      const { wan_interface, lan_interface } = req.body;
+      const config = loadConfig();
+      if (wan_interface) config.wan_interface = String(wan_interface).trim();
+      if (lan_interface) config.lan_interface = String(lan_interface).trim();
+      saveConfig(config);
+      await reloadRouting();
+      res.json({
+        success: true,
+        message: `インターフェース割り当てを更新しました (WAN: ${config.wan_interface}, LAN: ${config.lan_interface})`,
+        wan_interface: config.wan_interface,
+        lan_interface: config.lan_interface
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || 'インターフェース設定の更新に失敗しました' });
+    }
   });
 
   app.post('/api/wifi/mode', requireAdmin, async (req, res) => {

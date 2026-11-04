@@ -52,10 +52,13 @@ export default function ClassicLayout({ onLogout }: { onLogout: () => void }) {
       <div className="bg-[#003399] text-white px-5 py-3 flex justify-between items-center border-b-4 border-[#ff9900]">
         <div className="text-[18px] font-bold tracking-tight">PiFi Enterprise Router Web設定</div>
         {sysInfo && (
-          <div className="flex items-center gap-3 text-xs font-mono text-[#e2e8f0]">
+          <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-[#e2e8f0]">
+            <span className="bg-[#002266] px-2 py-0.5 rounded text-[11px] font-bold border border-[#3b82f6]">
+              {sysInfo.is_windows ? 'Windows' : 'Linux'}
+            </span>
             <span>WAN: <strong className="text-white">{sysInfo.wan_if}</strong></span>
             <span aria-hidden="true">·</span>
-            <span>モード: <strong className="text-white">{sysInfo.config_mode}</strong></span>
+            <span>LAN: <strong className="text-white">{sysInfo.lan_if || 'wlan0'}</strong></span>
             <span aria-hidden="true">·</span>
             <span>Gateway: <strong className="text-white">pifi.me/login</strong></span>
             <span aria-hidden="true">·</span>

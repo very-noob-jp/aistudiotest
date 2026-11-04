@@ -1,9 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import type { RouterConfig } from '../types';
+import type { RouterConfig, NetworkInterfaceInfo } from '../types';
 
 export default function NetworkSettings() {
   const [config, setConfig] = useState<RouterConfig | null>(null);
   const [statusMsg, setStatusMsg] = useState('');
+  const [interfaces, setInterfaces] = useState<NetworkInterfaceInfo[]>([]);
+  const [selectedWan, setSelectedWan] = useState('');
+  const [selectedLan, setSelectedLan] = useState('');
+  const [isWindowsHost, setIsWindowsHost] = useState(false);
+  const [osPlatformStr, setOsPlatformStr] = useState('');
+  const [savingIf, setSavingIf] = useState(false);
 
   // New Static Lease form state
   const [leaseMac, setLeaseMac] = useState('');
@@ -15,16 +21,62 @@ export default function NetworkSettings() {
   const [recIp, setRecIp] = useState('');
 
   const fetchConfig = () => {
-    fetch('/api/config').then(r => r.json()).then(setConfig);
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+      setConfig(cfg);
+      if (cfg.wan_interface) setSelectedWan(cfg.wan_interface);
+      if (cfg.lan_interface) setSelectedLan(cfg.lan_interface);
+    });
+  };
+
+  const fetchInterfaces = () => {
+    fetch('/api/interfaces')
+      .then(r => r.json())
+      .then(data => {
+        if (data.interfaces) setInterfaces(data.interfaces);
+        if (data.is_windows !== undefined) setIsWindowsHost(data.is_windows);
+        if (data.os_platform) setOsPlatformStr(data.os_platform);
+        if (data.wan_interface && !selectedWan) setSelectedWan(data.wan_interface);
+        if (data.lan_interface && !selectedLan) setSelectedLan(data.lan_interface);
+      })
+      .catch(() => {});
   };
 
   useEffect(() => {
     fetchConfig();
+    fetchInterfaces();
   }, []);
 
   const notify = (msg: string) => {
     setStatusMsg(msg);
-    setTimeout(() => setStatusMsg(''), 4000);
+    setTimeout(() => setStatusMsg(''), 4500);
+  };
+
+  const handleSaveInterfaces = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedWan || !selectedLan) {
+      notify('WANおよびLANの両方のインターフェースを選択してください。');
+      return;
+    }
+    setSavingIf(true);
+    try {
+      const res = await fetch('/api/config/interfaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wan_interface: selectedWan, lan_interface: selectedLan })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        notify(data.message || 'インターフェース割り当てを更新し、ルーティングテーブルを再構築しました。');
+        fetchInterfaces();
+        fetchConfig();
+      } else {
+        notify(`エラー: ${data.error || '更新に失敗しました'}`);
+      }
+    } catch (err: any) {
+      notify(`保存失敗: ${err.message}`);
+    } finally {
+      setSavingIf(false);
+    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -120,6 +172,170 @@ export default function NetworkSettings() {
           {statusMsg}
         </div>
       )}
+
+      {/* WAN / LAN Interface Selection (User Request: wlan,lan元を選べるようにする) */}
+      <div className="mb-6">
+        <div className="flex justify-between items-center border-b border-[#cccccc] pb-1 mb-4">
+          <h2 className="text-[16px] text-[#003399] border-l-[5px] border-l-[#003399] pl-2.5 font-bold m-0">
+            WAN / LAN インターフェース割り当て設定 (Interface Mapping)
+          </h2>
+          <div className="flex items-center gap-2">
+            <span className={`px-2 py-0.5 text-xs font-bold rounded ${isWindowsHost ? 'bg-[#dbeafe] text-[#1e40af] border border-[#93c5fd]' : 'bg-[#e0f2fe] text-[#0369a1] border border-[#7dd3fc]'}`}>
+              {isWindowsHost ? 'Windows ネイティブ環境 (Win32)' : (osPlatformStr || 'Linux (Raspberry Pi)')}
+            </span>
+          </div>
+        </div>
+
+        <div className="border border-[#cccccc] p-4 bg-[#f8fafc] mb-4">
+          <p className="text-xs text-[#555] mb-3">
+            物理NIC、Wi-Fiアダプター、USBテザリング回線から、<strong>インターネット上流回線 (WAN)</strong> と <strong>ローカル配信・AP側 (LAN)</strong> を選択して割り当てます。
+          </p>
+
+          <form onSubmit={handleSaveInterfaces}>
+            <table className="w-full border-collapse border border-[#cccccc] bg-white text-[13px] mb-3">
+              <tbody>
+                <tr>
+                  <th className="border border-[#cccccc] bg-[#eef3f6] w-[30%] text-left p-2.5 font-normal">
+                    <span className="font-bold text-[#003399]">WAN インターフェース</span>
+                    <span className="block text-[11px] text-[#666]">インターネット回線 (上流接続元)</span>
+                  </th>
+                  <td className="border border-[#cccccc] p-2.5">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                      <select
+                        value={selectedWan}
+                        onChange={e => setSelectedWan(e.target.value)}
+                        className="border border-[#888888] bg-white px-3 py-1.5 text-xs font-mono font-bold w-full sm:w-[320px]"
+                        required
+                      >
+                        <option value="">-- WANインターフェースを選択 --</option>
+                        {interfaces.map(iface => (
+                          <option key={iface.name} value={iface.name}>
+                            {iface.name} ({iface.type === 'wlan' ? '無線Wi-Fi' : iface.type === 'lan' ? '有線LAN' : iface.type === 'cellular' ? 'USBテザリング' : '仮想/他'}) - {iface.ip}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[11px] text-[#0066cc]">
+                        {interfaces.find(i => i.name === selectedWan)?.mac && `[MAC: ${interfaces.find(i => i.name === selectedWan)?.mac}]`}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <th className="border border-[#cccccc] bg-[#eef3f6] w-[30%] text-left p-2.5 font-normal">
+                    <span className="font-bold text-[#006600]">LAN / AP インターフェース</span>
+                    <span className="block text-[11px] text-[#666]">端末向けWi-Fi配信・有線LANポート (下流側)</span>
+                  </th>
+                  <td className="border border-[#cccccc] p-2.5">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                      <select
+                        value={selectedLan}
+                        onChange={e => setSelectedLan(e.target.value)}
+                        className="border border-[#888888] bg-white px-3 py-1.5 text-xs font-mono font-bold w-full sm:w-[320px]"
+                        required
+                      >
+                        <option value="">-- LANインターフェースを選択 --</option>
+                        {interfaces.map(iface => (
+                          <option key={iface.name} value={iface.name}>
+                            {iface.name} ({iface.type === 'wlan' ? '無線Wi-Fi' : iface.type === 'lan' ? '有線LAN' : iface.type === 'cellular' ? 'USBテザリング' : '仮想/他'}) - {iface.ip}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[11px] text-[#006600]">
+                        {interfaces.find(i => i.name === selectedLan)?.mac && `[MAC: ${interfaces.find(i => i.name === selectedLan)?.mac}]`}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <button
+                type="submit"
+                disabled={savingIf}
+                className="bg-[#003399] text-white hover:bg-[#002266] px-4 py-1.5 text-xs font-bold border border-[#001144] cursor-pointer disabled:opacity-50"
+              >
+                {savingIf ? '適用中...' : 'インターフェース割り当てを保存・適用'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const temp = selectedWan;
+                  setSelectedWan(selectedLan);
+                  setSelectedLan(temp);
+                }}
+                className="bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0] px-3 py-1.5 text-xs font-bold border border-[#cbd5e1] cursor-pointer"
+              >
+                ⇄ WANとLANを入れ替え
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  fetchInterfaces();
+                  notify('ネットワークアダプター一覧を再検出しました。');
+                }}
+                className="bg-[#f1f5f9] text-[#334155] hover:bg-[#e2e8f0] px-3 py-1.5 text-xs font-bold border border-[#cbd5e1] cursor-pointer"
+              >
+                ↻ アダプター再検出
+              </button>
+            </div>
+          </form>
+
+          {/* Detected Adapters Table */}
+          <div className="mt-4">
+            <div className="text-xs font-bold text-[#475569] mb-1.5">検出済みネットワークアダプター一覧:</div>
+            <table className="w-full border-collapse border border-[#cccccc] bg-white text-[12px]">
+              <thead>
+                <tr className="bg-[#eef3f6]">
+                  <th className="border border-[#cccccc] p-1.5 text-left">アダプター名</th>
+                  <th className="border border-[#cccccc] p-1.5 text-left">種別</th>
+                  <th className="border border-[#cccccc] p-1.5 text-left">IPアドレス / サブネット</th>
+                  <th className="border border-[#cccccc] p-1.5 text-left">MACアドレス</th>
+                  <th className="border border-[#cccccc] p-1.5 text-center">割当役割</th>
+                </tr>
+              </thead>
+              <tbody>
+                {interfaces.map(iface => {
+                  const isWan = selectedWan === iface.name;
+                  const isLan = selectedLan === iface.name;
+                  return (
+                    <tr key={iface.name} className={isWan ? 'bg-[#f0f7ff]' : isLan ? 'bg-[#f0fdf4]' : ''}>
+                      <td className="border border-[#cccccc] p-1.5 font-bold font-mono">
+                        {iface.name}
+                      </td>
+                      <td className="border border-[#cccccc] p-1.5">
+                        <span className="px-1.5 py-0.5 rounded text-[11px] font-bold bg-[#f1f5f9] text-[#475569]">
+                          {iface.type === 'wlan' ? '無線 (Wi-Fi)' : iface.type === 'lan' ? '有線 (Ethernet)' : iface.type === 'cellular' ? 'USBテザリング' : '仮想/他'}
+                        </span>
+                      </td>
+                      <td className="border border-[#cccccc] p-1.5 font-mono">
+                        {iface.ip} <span className="text-[#888]">/ {iface.netmask}</span>
+                      </td>
+                      <td className="border border-[#cccccc] p-1.5 font-mono text-[#555]">
+                        {iface.mac}
+                      </td>
+                      <td className="border border-[#cccccc] p-1.5 text-center">
+                        {isWan ? (
+                          <span className="bg-[#003399] text-white px-2 py-0.5 text-[11px] font-bold rounded">
+                            WAN (インターネット)
+                          </span>
+                        ) : isLan ? (
+                          <span className="bg-[#16a34a] text-white px-2 py-0.5 text-[11px] font-bold rounded">
+                            LAN (ローカル配信)
+                          </span>
+                        ) : (
+                          <span className="text-[#94a3b8] text-[11px]">未割り当て</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
       <form onSubmit={handleSave}>
         <h2 className="text-[16px] text-[#003399] border-l-[5px] border-l-[#003399] pl-2.5 border-b border-[#cccccc] pb-1 mt-0 mb-4 font-bold">
